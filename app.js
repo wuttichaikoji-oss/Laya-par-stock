@@ -1,5 +1,4 @@
-import { firebaseConfig, appOptions } from './firebase-config.js';
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js';
+import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js';
 import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp, writeBatch } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js';
 
@@ -14,8 +13,13 @@ const TABS = [
 ];
 const today = new Date().toISOString().slice(0,10);
 
-let db = null, auth = null, currentUser = null, ready = false;
+const CONFIG_STORAGE_KEY = 'laya.firebase.setup.v1';
+const DEFAULT_APP_OPTIONS = { tenantId: 'laya-resort-phuket', appName: 'Laya Liquor Usage & Par Cut' };
+
+let db = null, auth = null, currentUser = null, ready = false, liveApp = null, authUnsub = null;
 let unsubs = [];
+let activeFirebaseConfig = {};
+let activeAppOptions = { ...DEFAULT_APP_OPTIONS };
 
 const state = {
   tab: 'dashboard',
@@ -36,15 +40,113 @@ const state = {
   data: { liquors: [], recipes: [], sales: [], movements: [], counts: [] }
 };
 
+
+function safeParse(json){ try { return JSON.parse(json); } catch { return null; } }
+function getStoredSetup(){ return safeParse(localStorage.getItem(CONFIG_STORAGE_KEY) || 'null'); }
+function getFileFirebaseConfig(){ return window.LAYA_FIREBASE_CONFIG || {}; }
+function getFileAppOptions(){ return window.LAYA_APP_OPTIONS || {}; }
+function isPlaceholder(value=''){ return !String(value||'').trim() || /YOUR_|PASTE_/i.test(String(value)); }
+function configuredConfig(cfg={}){ return !!(cfg && !isPlaceholder(cfg.apiKey) && !isPlaceholder(cfg.projectId) && !isPlaceholder(cfg.appId)); }
+function getEffectiveSettings(){
+  const stored = getStoredSetup() || {};
+  const fileCfg = getFileFirebaseConfig() || {};
+  const fileOpts = { ...DEFAULT_APP_OPTIONS, ...(getFileAppOptions() || {}) };
+  const storedCfg = stored.firebaseConfig || {};
+  const storedOpts = stored.appOptions || {};
+  const useStored = configuredConfig(storedCfg);
+  return {
+    firebaseConfig: useStored ? { ...fileCfg, ...storedCfg } : fileCfg,
+    appOptions: useStored ? { ...fileOpts, ...storedOpts } : fileOpts,
+    source: useStored ? 'browser/localStorage' : (configuredConfig(fileCfg) ? 'firebase-config.js' : 'ยังไม่ได้ตั้งค่า')
+  };
+}
+function hydrateEffectiveSettings(){
+  const eff = getEffectiveSettings();
+  activeFirebaseConfig = eff.firebaseConfig || {};
+  activeAppOptions = { ...DEFAULT_APP_OPTIONS, ...(eff.appOptions || {}) };
+  return eff;
+}
+function configured(){ return configuredConfig(activeFirebaseConfig); }
+function currentSource(){ return getEffectiveSettings().source; }
+function masked(v=''){ const s = String(v||'').trim(); return !s ? '-' : (s.length <= 8 ? s : `${s.slice(0,4)}••••${s.slice(-4)}`); }
+function setupFormData(){
+  return {
+    firebaseConfig: {
+      apiKey: String($('cfgApiKey')?.value || '').trim(),
+      authDomain: String($('cfgAuthDomain')?.value || '').trim(),
+      projectId: String($('cfgProjectId')?.value || '').trim(),
+      storageBucket: String($('cfgStorageBucket')?.value || '').trim(),
+      messagingSenderId: String($('cfgMessagingSenderId')?.value || '').trim(),
+      appId: String($('cfgAppId')?.value || '').trim()
+    },
+    appOptions: {
+      tenantId: String($('cfgTenantId')?.value || DEFAULT_APP_OPTIONS.tenantId).trim() || DEFAULT_APP_OPTIONS.tenantId,
+      appName: String($('cfgAppName')?.value || DEFAULT_APP_OPTIONS.appName).trim() || DEFAULT_APP_OPTIONS.appName
+    }
+  };
+}
+function configJsText(firebaseConfig, appOptions){
+  return `window.LAYA_FIREBASE_CONFIG = ${JSON.stringify(firebaseConfig, null, 2)};
+
+window.LAYA_APP_OPTIONS = ${JSON.stringify(appOptions, null, 2)};
+`;
+}
+function downloadTextFile(filename, text, type='text/plain;charset=utf-8'){ const blob = new Blob([text], { type }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = filename; a.click(); URL.revokeObjectURL(url); }
+function setupWizardHtml(){
+  const eff = getEffectiveSettings();
+  const stored = getStoredSetup() || {};
+  const cfg = eff.firebaseConfig || {};
+  const opts = eff.appOptions || DEFAULT_APP_OPTIONS;
+  return `
+    <section class="card">
+      <div class="hotel-banner"><strong>Firebase Setup Wizard</strong>กรอกค่า Firebase ได้บนหน้าเว็บ แล้วบันทึกไว้ในเบราว์เซอร์ของเครื่องนี้</div>
+      <div class="setup-grid">
+        <div class="setup-card">
+          <h3>สถานะการตั้งค่า</h3>
+          <div class="table-wrap" style="margin-top:12px"><table><tbody>
+            <tr><th>แหล่ง config ที่ใช้งาน</th><td><span class="source-tag">${esc(currentSource())}</span></td></tr>
+            <tr><th>Project ID</th><td>${esc(cfg.projectId || '-')}</td></tr>
+            <tr><th>Tenant ID</th><td>${esc(opts.tenantId || '-')}</td></tr>
+            <tr><th>App Name</th><td>${esc(opts.appName || '-')}</td></tr>
+            <tr><th>มี config เก็บใน browser</th><td>${stored.firebaseConfig ? '<span class="pill ok">มี</span>' : '<span class="pill">ไม่มี</span>'}</td></tr>
+          </tbody></table></div>
+          <div class="box-note" style="margin-top:16px">แบบ browser/localStorage จะสะดวกสำหรับเครื่องนี้ทันที แต่ถ้าต้องการให้ทุกคนที่เปิดเว็บเห็นค่าเดียวกัน ควรดาวน์โหลดไฟล์ <code>firebase-config.js</code> แล้วอัปโหลดขึ้นเว็บแทน</div>
+        </div>
+        <div class="setup-card">
+          <h3>ค่าจาก Firebase Console</h3>
+          <p class="sub">ไปที่ Project settings &gt; Your apps &gt; SDK setup and configuration</p>
+          <form id="setupForm">
+            <div class="field-grid-3">
+              <div><label>apiKey</label><input id="cfgApiKey" value="${esc(cfg.apiKey || '')}" placeholder="AIza..."></div>
+              <div><label>authDomain</label><input id="cfgAuthDomain" value="${esc(cfg.authDomain || '')}" placeholder="your-project.firebaseapp.com"></div>
+              <div><label>projectId</label><input id="cfgProjectId" value="${esc(cfg.projectId || '')}" placeholder="your-project-id"></div>
+              <div><label>storageBucket</label><input id="cfgStorageBucket" value="${esc(cfg.storageBucket || '')}" placeholder="your-project.firebasestorage.app"></div>
+              <div><label>messagingSenderId</label><input id="cfgMessagingSenderId" value="${esc(cfg.messagingSenderId || '')}" placeholder="1234567890"></div>
+              <div><label>appId</label><input id="cfgAppId" value="${esc(cfg.appId || '')}" placeholder="1:123:web:abc"></div>
+              <div><label>tenantId</label><input id="cfgTenantId" value="${esc(opts.tenantId || DEFAULT_APP_OPTIONS.tenantId)}"></div>
+              <div style="grid-column:span 2"><label>App Name</label><input id="cfgAppName" value="${esc(opts.appName || DEFAULT_APP_OPTIONS.appName)}"></div>
+            </div>
+            <div class="helper">ค่า Firebase config ไม่ใช่ secret แต่แนะนำให้ใช้โปรเจกต์ของหน่อยเอง และตั้ง Firestore Rules ให้เรียบร้อย</div>
+            <div class="inline-actions" style="margin-top:16px">
+              <button type="submit">บันทึกใน browser และเชื่อมต่อ</button>
+              <button type="button" id="btnTestSetup" class="secondary">ทดสอบการเชื่อมต่อ</button>
+              <button type="button" id="btnDownloadConfig" class="secondary">ดาวน์โหลด firebase-config.js</button>
+              <button type="button" id="btnClearStoredConfig" class="red">ล้างค่าที่บันทึกไว้</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </section>`;
+}
+
 const $ = (id) => document.getElementById(id);
 const esc = (s='') => String(s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const num = (v,d=0) => Number.isFinite(Number(v)) ? Number(v) : d;
 const round = (v,p=2) => Math.round((num(v)*(10**p))+Number.EPSILON)/(10**p);
 const fmt = (v,p=0) => round(v,p).toLocaleString('en-US',{minimumFractionDigits:p,maximumFractionDigits:p});
 const status = (text, kind='') => { const el=$('statusBox'); if(el){ el.textContent=text; el.className=`status ${kind}`; } };
-const configured = () => firebaseConfig && firebaseConfig.apiKey && !String(firebaseConfig.apiKey).includes('PASTE_');
-const cRef = (name) => collection(db, `tenants/${appOptions.tenantId}/${name}`);
-const dRef = (name,id) => doc(db, `tenants/${appOptions.tenantId}/${name}/${id}`);
+const cRef = (name) => collection(db, `tenants/${activeAppOptions.tenantId}/${name}`);
+const dRef = (name,id) => doc(db, `tenants/${activeAppOptions.tenantId}/${name}/${id}`);
 const getLiquor = (id) => state.data.liquors.find(x=>x.id===id);
 const getRecipe = (id) => state.data.recipes.find(x=>x.id===id);
 const outletOptions = (selected) => OUTLETS.map(o => `<option value="${o}" ${o===selected?'selected':''}>${o}</option>`).join('');
@@ -65,14 +167,18 @@ function renderTabs(){
 }
 
 function setupView(){
+  state.tab = 'settings';
   $('app').innerHTML = `
+    ${setupWizardHtml()}
     <section class="card">
       <h2>ยังไม่ได้ตั้งค่า Firebase</h2>
-      <p class="sub">ใส่ค่า Firebase ของหน่อยในไฟล์ <strong>firebase-config.js</strong> ก่อน</p>
+      <p class="sub">หน่อยสามารถใช้ Setup Wizard ด้านบนได้ทันที โดยไม่ต้องแก้ไฟล์ก่อน</p>
       <div class="box-note">
-        เปิดไฟล์ <code>README_SETUP_TH.txt</code> จะมีขั้นตอนสร้างโปรเจกต์, เปิด Firestore, เปิด Anonymous Auth และเอา Rules ไปวาง
+        ถ้าต้องการตั้งค่าแบบถาวรสำหรับทุกเครื่อง ให้กรอกค่าใน Setup Wizard แล้วกด <strong>ดาวน์โหลด firebase-config.js</strong>
+        จากนั้นนำไฟล์ที่ได้ไปแทนที่ไฟล์เดิมบนเว็บของหน่อย
       </div>
     </section>`;
+  bindViewEvents();
 }
 
 function summaryReport(date,outlet){
@@ -144,7 +250,7 @@ function dashboardView(){
   return `
     <section class="grid grid-2">
       <div class="card">
-        <div class="hotel-banner"><strong>${esc(appOptions.appName||'Laya Liquor Usage & Par Cut')}</strong>ข้อมูลวันนี้จาก Firebase Cloud</div>
+        <div class="hotel-banner"><strong>${esc(activeAppOptions.appName||'Laya Liquor Usage & Par Cut')}</strong>ข้อมูลวันนี้จาก Firebase Cloud</div>
         <div class="field-grid-4 no-print">
           <div><label>วันที่</label><input id="dashDate" type="date" value="${dashDate}"></div>
           <div><label>Outlet</label><select id="dashOutlet">${outletOptions(dashOutlet)}</select></div>
@@ -312,11 +418,14 @@ function reportView(){
 
 function settingsView(){
   return `
+    ${setupWizardHtml()}
     <section class="grid grid-2">
       <div class="card"><h2>Cloud Settings</h2><div class="table-wrap"><table><tbody>
-        <tr><th>App Name</th><td>${esc(appOptions.appName||'-')}</td></tr>
-        <tr><th>Tenant ID</th><td>${esc(appOptions.tenantId||'-')}</td></tr>
-        <tr><th>Project ID</th><td>${esc(firebaseConfig.projectId||'-')}</td></tr>
+        <tr><th>App Name</th><td>${esc(activeAppOptions.appName||'-')}</td></tr>
+        <tr><th>Tenant ID</th><td>${esc(activeAppOptions.tenantId||'-')}</td></tr>
+        <tr><th>Project ID</th><td>${esc(activeFirebaseConfig.projectId||'-')}</td></tr>
+        <tr><th>apiKey</th><td>${esc(masked(activeFirebaseConfig.apiKey||'-'))}</td></tr>
+        <tr><th>Config Source</th><td><span class="source-tag">${esc(currentSource())}</span></td></tr>
         <tr><th>Auth UID</th><td>${esc(currentUser?.uid||'-')}</td></tr>
         <tr><th>Connected</th><td>${ready?'<span class="pill ok">พร้อมใช้งาน</span>':'<span class="pill warn">กำลังเชื่อมต่อ</span>'}</td></tr>
       </tbody></table></div></div>
@@ -333,19 +442,24 @@ function settingsView(){
 function render(){
   renderTabs();
   if(!configured()) return setupView();
-  if(!ready) { $('app').innerHTML = '<section class="card"><h2>กำลังโหลดข้อมูลจาก Firebase...</h2><p class="sub">เมื่อเชื่อมต่อสำเร็จ หน้าจอจะอัปเดตอัตโนมัติ</p></section>'; return; }
   const views = { dashboard:dashboardView, liquors:liquorView, recipes:recipeView, entry:entryView, report:reportView, settings:settingsView };
+  if(!ready && state.tab !== 'settings') { $('app').innerHTML = '<section class="card"><h2>กำลังโหลดข้อมูลจาก Firebase...</h2><p class="sub">เมื่อเชื่อมต่อสำเร็จ หน้าจอจะอัปเดตอัตโนมัติ</p></section>'; return; }
   $('app').innerHTML = views[state.tab]();
   bindViewEvents();
 }
 
 function bindBaseEvents(){
+  $('btnSetup').onclick = () => { state.tab = 'settings'; render(); window.scrollTo({ top: 0, behavior: 'smooth' }); };
   $('btnDemo').onclick = seedDemoData;
   $('btnExport').onclick = exportJson;
   $('btnRefresh').onclick = () => render();
 }
 
 function bindViewEvents(){
+  $('setupForm') && ($('setupForm').onsubmit = saveSetupAndConnect);
+  $('btnTestSetup') && ($('btnTestSetup').onclick = testSetupConnection);
+  $('btnDownloadConfig') && ($('btnDownloadConfig').onclick = downloadConfigFromWizard);
+  $('btnClearStoredConfig') && ($('btnClearStoredConfig').onclick = clearStoredConfig);
   $('dashDate') && ($('dashDate').oninput = e => { state.ui.dashDate = e.target.value; render(); });
   $('dashOutlet') && ($('dashOutlet').onchange = e => { state.ui.dashOutlet = e.target.value; render(); });
 
@@ -384,6 +498,81 @@ function bindViewEvents(){
   $('reportDate') && ($('reportDate').oninput = e => { state.ui.reportDate = e.target.value; render(); });
   $('reportOutlet') && ($('reportOutlet').onchange = e => { state.ui.reportOutlet = e.target.value; render(); });
   $('printReq') && ($('printReq').onclick = printRequisition);
+}
+
+async function saveSetupAndConnect(e){
+  e.preventDefault();
+  const payload = setupFormData();
+  if(!configuredConfig(payload.firebaseConfig)) return alert('กรอกค่า Firebase ให้ครบก่อน');
+  localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(payload));
+  hydrateEffectiveSettings();
+  status('บันทึกค่า Firebase ใน browser แล้ว กำลังเชื่อมต่อ...','warn');
+  state.tab = 'settings';
+  await connectFirebase();
+}
+
+async function testSetupConnection(){
+  const payload = setupFormData();
+  if(!configuredConfig(payload.firebaseConfig)) return alert('กรอกค่า Firebase ให้ครบก่อน');
+  status('กำลังทดสอบการเชื่อมต่อ Firebase...','warn');
+  let testApp = null;
+  try {
+    testApp = initializeApp(payload.firebaseConfig, `setup-test-${Date.now()}`);
+    const testAuth = getAuth(testApp);
+    getFirestore(testApp);
+    await signInAnonymously(testAuth);
+    status('ทดสอบผ่าน: Firebase และ Anonymous Auth ใช้งานได้','ok');
+  } catch(err) {
+    console.error(err);
+    status(`ทดสอบไม่ผ่าน: ${err.message}`,'danger');
+  } finally {
+    if(testApp) { try { await deleteApp(testApp); } catch(_) {} }
+  }
+}
+
+function downloadConfigFromWizard(){
+  const payload = setupFormData();
+  downloadTextFile('firebase-config.js', configJsText(payload.firebaseConfig, payload.appOptions), 'application/javascript;charset=utf-8');
+  status('ดาวน์โหลด firebase-config.js แล้ว','ok');
+}
+
+async function clearStoredConfig(){
+  if(!confirm('ต้องการล้างค่า Firebase ที่บันทึกไว้ใน browser นี้หรือไม่?')) return;
+  localStorage.removeItem(CONFIG_STORAGE_KEY);
+  hydrateEffectiveSettings();
+  status('ล้างค่า browser/localStorage แล้ว','warn');
+  await connectFirebase();
+}
+
+async function connectFirebase(){
+  ready = false;
+  currentUser = null;
+  cleanup();
+  if(authUnsub){ authUnsub(); authUnsub = null; }
+  if(liveApp){ try { await deleteApp(liveApp); } catch(_) {} liveApp = null; }
+  db = null; auth = null;
+  render();
+  if(!configured()){
+    status('ยังไม่ได้ตั้งค่า Firebase — ใช้ Setup Wizard ด้านล่างได้เลย','warn');
+    return;
+  }
+  try {
+    liveApp = initializeApp(activeFirebaseConfig, `laya-live-${Date.now()}`);
+    db = getFirestore(liveApp);
+    auth = getAuth(liveApp);
+    authUnsub = onAuthStateChanged(auth, async (user) => {
+      if(user){
+        currentUser = user;
+        cleanup();
+        ['liquors','recipes','sales','movements','counts'].forEach(n => unsubs.push(bindCollection(n)));
+      } else {
+        await signInAnonymously(auth);
+      }
+    });
+  } catch(err) {
+    console.error(err);
+    status(`เชื่อม Firebase ไม่สำเร็จ: ${err.message}`,'danger');
+  }
 }
 
 async function saveLiquor(e){
@@ -449,12 +638,12 @@ async function removeRecord(type,id){ if(!confirm('ยืนยันการ�
 function printRequisition(){
   const rep = summaryReport(state.ui.reportDate,state.ui.reportOutlet); const rows = rep.rows.filter(r=>r.gapMl>0.01);
   const win = window.open('', '_blank', 'width=1100,height=800');
-  win.document.write(`<html><head><title>Par Requisition</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dfeb;padding:10px;text-align:left}th{background:#f3f7ff}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px}.box{padding-top:24px;border-top:1px solid #8ea2c0;text-align:center}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(appOptions.appName)}</div><div>Par Requisition Form</div></div><div><div><strong>Date:</strong> ${state.ui.reportDate}</div><div><strong>Outlet:</strong> ${esc(state.ui.reportOutlet)}</div></div></div><table><thead><tr><th>Liquor</th><th>Closing Base (ml)</th><th>Par (ml)</th><th>Gap (ml)</th><th>Suggested Refill (Bottle)</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.liquor.name)}</td><td>${fmt(r.actual===null?r.theo:r.actual,0)}</td><td>${fmt(r.parMl,0)}</td><td>${fmt(r.gapMl,0)}</td><td>${fmt(r.refillBottles,2)}</td></tr>`).join(''):'<tr><td colspan="5">ไม่มีรายการต่ำกว่า Par</td></tr>'}</tbody></table><div class="sign"><div class="box">Prepared By</div><div class="box">Checked By</div><div class="box">Approved By</div></div></body></html>`);
+  win.document.write(`<html><head><title>Par Requisition</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dfeb;padding:10px;text-align:left}th{background:#f3f7ff}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px}.box{padding-top:24px;border-top:1px solid #8ea2c0;text-align:center}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(activeAppOptions.appName)}</div><div>Par Requisition Form</div></div><div><div><strong>Date:</strong> ${state.ui.reportDate}</div><div><strong>Outlet:</strong> ${esc(state.ui.reportOutlet)}</div></div></div><table><thead><tr><th>Liquor</th><th>Closing Base (ml)</th><th>Par (ml)</th><th>Gap (ml)</th><th>Suggested Refill (Bottle)</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.liquor.name)}</td><td>${fmt(r.actual===null?r.theo:r.actual,0)}</td><td>${fmt(r.parMl,0)}</td><td>${fmt(r.gapMl,0)}</td><td>${fmt(r.refillBottles,2)}</td></tr>`).join(''):'<tr><td colspan="5">ไม่มีรายการต่ำกว่า Par</td></tr>'}</tbody></table><div class="sign"><div class="box">Prepared By</div><div class="box">Checked By</div><div class="box">Approved By</div></div></body></html>`);
   win.document.close(); win.focus(); win.print();
 }
 
 async function exportJson(){
-  const blob = new Blob([JSON.stringify({tenantId:appOptions.tenantId, exportedAt:new Date().toISOString(), data:state.data}, null, 2)], {type:'application/json'});
+  const blob = new Blob([JSON.stringify({tenantId:activeAppOptions.tenantId, exportedAt:new Date().toISOString(), data:state.data}, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`laya-liquor-firebase-export-${today}.json`; a.click(); URL.revokeObjectURL(url); status('ดาวน์โหลด JSON เรียบร้อย','ok');
 }
 
@@ -490,15 +679,10 @@ function bindCollection(name){ return onSnapshot(cRef(name), snap => { state.dat
 function cleanup(){ unsubs.forEach(fn => fn && fn()); unsubs = []; }
 
 async function init(){
-  bindBaseEvents(); render();
-  if(!configured()){ status('ยังไม่ได้ตั้งค่า Firebase ใน firebase-config.js','warn'); return; }
-  try {
-    const app = initializeApp(firebaseConfig); db = getFirestore(app); auth = getAuth(app);
-    onAuthStateChanged(auth, async (user) => {
-      if(user){ currentUser = user; cleanup(); ['liquors','recipes','sales','movements','counts'].forEach(n => unsubs.push(bindCollection(n))); }
-      else { await signInAnonymously(auth); }
-    });
-  } catch(err) { console.error(err); status(`เชื่อม Firebase ไม่สำเร็จ: ${err.message}`,'danger'); }
+  bindBaseEvents();
+  hydrateEffectiveSettings();
+  render();
+  await connectFirebase();
 }
 
 init();

@@ -14,3 +14,10 @@ label{display:block;margin-bottom:6px;color:var(--muted);font-size:.9rem;font-we
 .sign-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:42px}.sign-box{padding-top:26px;border-top:1px solid #8ea2c0;text-align:center}
 @media (max-width:1100px){.grid-2,.grid-3,.grid-4,.kpis,.field-grid,.field-grid-3,.field-grid-4,.field-grid-5,.field-grid-6{grid-template-columns:1fr}}
 @media print{body{background:#fff}.no-print{display:none!important}}
+
+.code-sample{white-space:pre-wrap;font-family:Consolas,monospace;background:#0f172a;color:#e2e8f0;padding:14px 16px;border-radius:16px;overflow:auto}
+.source-tag{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;font-size:.82rem;font-weight:800;background:#eef3ff;color:var(--accent)}
+.setup-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.setup-card{border:1px solid var(--line);border-radius:18px;padding:16px;background:linear-gradient(180deg,#fff 0,#f9fbff 100%)}
+.helper{font-size:.86rem;color:var(--muted);margin-top:6px}
+@media (max-width:1100px){.setup-grid{grid-template-columns:1fr}}

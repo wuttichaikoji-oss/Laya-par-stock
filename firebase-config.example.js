@@ -1,4 +1,4 @@
-export const firebaseConfig = {
+window.LAYA_FIREBASE_CONFIG = {
   apiKey: "YOUR_API_KEY",
   authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
   projectId: "YOUR_PROJECT_ID",
@@ -7,7 +7,7 @@ export const firebaseConfig = {
   appId: "YOUR_APP_ID"
 };
 
-export const appOptions = {
+window.LAYA_APP_OPTIONS = {
   tenantId: "laya-resort-phuket",
   appName: "Laya Liquor Usage & Par Cut"
 };
