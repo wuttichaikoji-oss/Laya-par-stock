@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Laya Liquor Usage & Par Cut v1.6 Firebase</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <div class="crest">LR</div>
+        <div>
+          <h1>Laya Liquor Usage &amp; Par Cut v1.6</h1>
+          <p>Firebase Cloud Edition · Manual Entry · Mangrove / The Taste</p>
+        </div>
+      </div>
+      <div class="actions no-print">
+        <button id="btnDemo" class="secondary">โหลดข้อมูลตัวอย่าง</button>
+        <button id="btnExport" class="secondary">ดาวน์โหลด JSON</button>
+        <button id="btnRefresh" class="secondary">รีเฟรช</button>
+      </div>
+    </header>
+
+    <div id="statusBox" class="status">กำลังเชื่อมต่อ Firebase...</div>
+    <nav id="tabs" class="tabs no-print"></nav>
+    <main id="app"></main>
+  </div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
