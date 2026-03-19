@@ -1,13 +1,13 @@
 window.LAYA_FIREBASE_CONFIG = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT_ID.firebasestorage.app",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyCRyEOcaHFpXkA6EyJ1iL903qj9Rp7mgio",
+  authDomain: "laya-par-stock.firebaseapp.com",
+  projectId: "laya-par-stock",
+  storageBucket: "laya-par-stock.firebasestorage.app",
+  messagingSenderId: "234383196424",
+  appId: "1:234383196424:web:94946c0b4f1a629844ecbd"
 };
 
 window.LAYA_APP_OPTIONS = {
-  tenantId: "laya-resort-phuket",
+  tenantId: "laya-liquor",
   appName: "Laya Liquor Usage & Par Cut"
 };
