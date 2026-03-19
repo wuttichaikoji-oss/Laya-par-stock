@@ -156,6 +156,17 @@ const liquorOptions = (selected,outletOnly=false) => `<option value="">-- เล
   .map(l => `<option value="${l.id}" ${l.id===selected?'selected':''}>${esc(l.name)}${outletOnly?'':` · ${esc(l.outlet)}`}</option>`).join('');
 const recipeIngredientsText = (r) => (r.ingredients||[]).map(i => `${getLiquor(i.liquorId)?.name||'Unknown'} ${fmt(i.ml,0)} ml`).join(', ');
 const movementLabel = (k) => ({receive:'Receive',transferIn:'Transfer In',transferOut:'Transfer Out',breakage:'Breakage',comp:'Complimentary',staff:'Staff Drink',adjust:'Adjustment'})[k] || k;
+const upsertLocal = (type, record) => {
+  const list = state.data[type] || (state.data[type] = []);
+  const idx = list.findIndex(x => x.id === record.id);
+  if(idx >= 0) list[idx] = { ...list[idx], ...record };
+  else list.push(record);
+};
+const removeLocalById = (type, id) => {
+  state.data[type] = (state.data[type] || []).filter(x => x.id !== id);
+};
+const entryUsageRows = (rep) => rep.rows.filter(r => r.usageMl > 0.01 || r.actual !== null || r.gapMl > 0.01)
+  .sort((a,b) => (b.usageMl - a.usageMl) || a.liquor.name.localeCompare(b.liquor.name));
 const saleId = (date,outlet,recipeId) => `${date}_${outlet.replace(/\s+/g,'-')}_${recipeId}`;
 const moveId = (date,outlet,liquorId,kind) => `${date}_${outlet.replace(/\s+/g,'-')}_${liquorId}_${kind}`;
 const countId = (date,outlet,liquorId) => `${date}_${outlet.replace(/\s+/g,'-')}_${liquorId}`;
@@ -351,51 +362,100 @@ function recipeView(){
     </section>`;
 }
 
+function entryUsageSummaryHtml(rep){
+  const rows = entryUsageRows(rep);
+  return `
+    <div class="table-wrap compact-table"><table><thead><tr><th>Liquor</th><th class="right">Used</th><th class="right">Closing</th><th class="right">Var</th></tr></thead><tbody>
+      ${rows.length ? rows.map(r=>`<tr><td><strong>${esc(r.liquor.name)}</strong><div class="muted">${esc(r.liquor.outlet)}</div></td><td class="right">${fmt(r.usageMl,0)} ml</td><td class="right">${fmt(r.actual===null?r.theo:r.actual,0)} ml</td><td class="right ${r.variance===null?'':(r.variance<0?'danger-text':r.variance>0?'warn-text':'ok-text')}">${r.variance===null?'-':fmt(r.variance,0)}</td></tr>`).join('') : '<tr><td colspan="4" class="center muted">ยังไม่มีการใช้เหล้าวันนี้</td></tr>'}
+    </tbody></table></div>`;
+}
+
 function entryView(){
-  const recipes = state.data.recipes.filter(r => r.outlet===state.ui.outlet && r.name.toLowerCase().includes(state.ui.salesSearch.toLowerCase())).sort((a,b)=>a.name.localeCompare(b.name));
+  const recipes = state.data.recipes
+    .filter(r => r.outlet===state.ui.outlet && r.name.toLowerCase().includes(state.ui.salesSearch.toLowerCase()))
+    .sort((a,b)=>a.name.localeCompare(b.name));
   const salesMap = Object.fromEntries(state.data.sales.filter(s=>s.date===state.ui.date && s.outlet===state.ui.outlet).map(s=>[s.recipeId,s]));
   const moves = state.data.movements.filter(m=>m.date===state.ui.date && m.outlet===state.ui.outlet);
   const counts = state.data.counts.filter(c=>c.date===state.ui.date && c.outlet===state.ui.outlet);
   const rep = summaryReport(state.ui.date,state.ui.outlet);
   return `
-    <section class="grid grid-2">
-      <div class="card">
-        <h2>Daily Sales Entry</h2>
-        <p class="sub">คีย์ยอดขายจากกระดาษ แล้วกดบันทึกลง Firebase</p>
-        <div class="field-grid-4 no-print">
+    <section class="entry-layout">
+      <div class="card entry-main">
+        <div class="section-head">
+          <div>
+            <h2>Daily Sales Entry</h2>
+            <p class="sub">คีย์ยอดขายจากกระดาษ แล้วบันทึก 1 ครั้งต่อเมนู · ถ้าใส่ 0 แล้วบันทึก ระบบจะลบยอดขายเมนูนั้นออก</p>
+          </div>
+          <div class="entry-chip-group">
+            <span class="pill">${esc(state.ui.outlet)}</span>
+            <span class="pill">${state.ui.date}</span>
+          </div>
+        </div>
+        <div class="field-grid-4 no-print compact-fields">
           <div><label>วันที่</label><input id="entryDate" type="date" value="${state.ui.date}"></div>
           <div><label>Outlet</label><select id="entryOutlet">${outletOptions(state.ui.outlet)}</select></div>
-          <div style="grid-column:span 2"><label>ค้นหาเมนู</label><input id="salesSearch" value="${esc(state.ui.salesSearch)}"></div>
+          <div style="grid-column:span 2"><label>ค้นหาเมนู</label><input id="salesSearch" value="${esc(state.ui.salesSearch)}" placeholder="พิมพ์ชื่อเมนูที่ต้องการคีย์"></div>
         </div>
-        <div class="quick-grid" style="margin-top:16px">
+        <div class="sales-list" style="margin-top:16px">
         ${recipes.length ? recipes.map(r=>{
           const q = num(salesMap[r.id]?.qty);
-          return `<div class="quick-card"><div class="quick-name">${esc(r.name)}</div><div class="quick-meta">${esc(r.type)} · ${esc(recipeIngredientsText(r))}</div><div class="quick-actions"><button class="small secondary" data-adjust-sale="${r.id}" data-delta="-1">-1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="1">+1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="5">+5</button><span class="quick-count" id="badge_${r.id}">${fmt(q,0)}</span></div><div class="inline-actions" style="margin-top:12px"><input id="qty_${r.id}" type="number" min="0" step="1" value="${q||''}" style="max-width:96px"><button class="small" data-save-sale="${r.id}">บันทึก</button><button class="small red" data-clear-sale="${r.id}">ล้าง</button></div></div>`;
+          return `<article class="sale-card"><div class="sale-card-top"><div><div class="sale-name">${esc(r.name)}</div><div class="sale-meta">${esc(recipeIngredientsText(r))}</div></div><div class="sale-qty-badge">${fmt(q,0)}</div></div><div class="sale-controls"><div class="stepper"><button class="small secondary" data-adjust-sale="${r.id}" data-delta="-1">-1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="1">+1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="5">+5</button></div><div class="sale-input-wrap"><label class="mini-label" for="qty_${r.id}">Qty</label><input id="qty_${r.id}" class="sale-qty-input" type="number" min="0" step="1" value="${q||''}" placeholder="0"></div><button class="sale-save" data-save-sale="${r.id}">บันทึก</button></div></article>`;
         }).join('') : '<div class="empty">ยังไม่มีสูตรใน outlet นี้</div>'}
         </div>
       </div>
-      <div class="card">
-        <h2>Movement / Actual Count</h2>
-        <div class="field-grid-4">
-          <div><label>เหล้า</label><select id="moveLiquor">${liquorOptions('',true)}</select></div>
-          <div><label>Movement</label><select id="moveKind">${['receive','transferIn','transferOut','breakage','comp','staff','adjust'].map(k=>`<option value="${k}">${movementLabel(k)}</option>`).join('')}</select></div>
-          <div><label>จำนวน (ml)</label><input id="moveQty" type="number" min="0" step="0.01"></div>
-          <div><label>หมายเหตุ</label><input id="moveNote"></div>
+      <aside class="entry-side">
+        <div class="card compact-card">
+          <div class="section-head tight">
+            <div>
+              <h2>Movement</h2>
+              <p class="sub">บันทึก receive, breakage, comp และการปรับสต๊อก</p>
+            </div>
+            <span class="pill warn">${moves.length} รายการ</span>
+          </div>
+          <div class="field-grid compact-fields">
+            <div><label>เหล้า</label><select id="moveLiquor">${liquorOptions('',true)}</select></div>
+            <div><label>Movement</label><select id="moveKind">${['receive','transferIn','transferOut','breakage','comp','staff','adjust'].map(k=>`<option value="${k}">${movementLabel(k)}</option>`).join('')}</select></div>
+            <div><label>จำนวน (ml)</label><input id="moveQty" type="number" min="0" step="0.01"></div>
+            <div><label>หมายเหตุ</label><input id="moveNote" placeholder="optional"></div>
+          </div>
+          <div class="inline-actions" style="margin-top:12px"><button id="saveMove">บันทึก Movement</button></div>
         </div>
-        <div class="inline-actions" style="margin-top:12px"><button id="saveMove">บันทึก Movement</button></div>
-        <div class="field-grid-4" style="margin-top:16px">
-          <div><label>Actual Count · เหล้า</label><select id="countLiquor">${liquorOptions('',true)}</select></div>
-          <div><label>Actual Closing (ml)</label><input id="countActual" type="number" min="0" step="0.01"></div>
-          <div style="display:flex;align-items:flex-end"><button id="saveCount">บันทึก Actual Count</button></div>
-          <div class="box-note">ถ้ามีนับจริง ระบบจะใช้ค่านี้คำนวณ variance และ par cut</div>
+
+        <div class="card compact-card">
+          <div class="section-head tight">
+            <div>
+              <h2>Actual Count</h2>
+              <p class="sub">เมื่อนับจริงแล้ว ระบบจะใช้ค่านี้คำนวณ variance และ par cut ทันที</p>
+            </div>
+            <span class="pill">${counts.length} รายการ</span>
+          </div>
+          <div class="field-grid compact-fields">
+            <div><label>เหล้า</label><select id="countLiquor">${liquorOptions('',true)}</select></div>
+            <div><label>Actual Closing (ml)</label><input id="countActual" type="number" min="0" step="0.01"></div>
+          </div>
+          <div class="inline-actions" style="margin-top:12px"><button id="saveCount">บันทึก Actual Count</button></div>
         </div>
-        <div class="kpis" style="margin-top:16px"><div class="kpi"><div class="label">ใช้เหล้ารวม</div><div class="value">${fmt(rep.totalUsage,0)} ml</div></div><div class="kpi"><div class="label">ต่ำกว่า Par</div><div class="value">${rep.lowPar}</div></div><div class="kpi"><div class="label">Movements</div><div class="value">${moves.length}</div></div><div class="kpi"><div class="label">Actual Count</div><div class="value">${counts.length}</div></div></div>
-        <div class="table-wrap"><table><thead><tr><th>ประเภท</th><th>รายละเอียด</th><th class="right">จำนวน</th><th class="no-print">ลบ</th></tr></thead><tbody>
-          ${moves.map(m=>`<tr><td>${movementLabel(m.kind)}</td><td><strong>${esc(getLiquor(m.liquorId)?.name||'-')}</strong><div class="muted">${esc(m.note||'')}</div></td><td class="right">${fmt(m.qtyMl,0)} ml</td><td class="no-print"><button class="small red" data-delete-move="${m.id}">ลบ</button></td></tr>`).join('')}
-          ${counts.map(c=>`<tr><td>Actual Count</td><td><strong>${esc(getLiquor(c.liquorId)?.name||'-')}</strong></td><td class="right">${fmt(c.actualMl,0)} ml</td><td class="no-print"><button class="small red" data-delete-count="${c.id}">ลบ</button></td></tr>`).join('')}
-          ${(!moves.length && !counts.length) ? '<tr><td colspan="4" class="center muted">ยังไม่มี movement หรือ count วันนี้</td></tr>' : ''}
-        </tbody></table></div>
-      </div>
+
+        <div class="card compact-card">
+          <div class="section-head tight">
+            <div>
+              <h2>คำนวณหลังบันทึกทันที</h2>
+              <p class="sub">เมื่อบันทึกยอดขาย, movement หรือ actual count ด้านล่างนี้จะคำนวณใหม่อัตโนมัติ</p>
+            </div>
+          </div>
+          <div class="kpis kpis-2" style="margin-bottom:12px"><div class="kpi"><div class="label">ใช้เหล้ารวม</div><div class="value">${fmt(rep.totalUsage,0)} ml</div></div><div class="kpi"><div class="label">ต่ำกว่า Par</div><div class="value">${rep.lowPar}</div></div></div>
+          ${entryUsageSummaryHtml(rep)}
+        </div>
+
+        <div class="card compact-card">
+          <div class="section-head tight"><h2>บันทึกวันนี้</h2></div>
+          <div class="table-wrap compact-table"><table><thead><tr><th>ประเภท</th><th>รายละเอียด</th><th class="right">จำนวน</th><th class="no-print">ลบ</th></tr></thead><tbody>
+            ${moves.map(m=>`<tr><td>${movementLabel(m.kind)}</td><td><strong>${esc(getLiquor(m.liquorId)?.name||'-')}</strong><div class="muted">${esc(m.note||'')}</div></td><td class="right">${fmt(m.qtyMl,0)} ml</td><td class="no-print"><button class="small red" data-delete-move="${m.id}">ลบ</button></td></tr>`).join('')}
+            ${counts.map(c=>`<tr><td>Actual Count</td><td><strong>${esc(getLiquor(c.liquorId)?.name||'-')}</strong></td><td class="right">${fmt(c.actualMl,0)} ml</td><td class="no-print"><button class="small red" data-delete-count="${c.id}">ลบ</button></td></tr>`).join('')}
+            ${(!moves.length && !counts.length) ? '<tr><td colspan="4" class="center muted">ยังไม่มี movement หรือ count วันนี้</td></tr>' : ''}
+          </tbody></table></div>
+        </div>
+      </aside>
     </section>`;
 }
 
@@ -489,7 +549,6 @@ function bindViewEvents(){
   $('salesSearch') && ($('salesSearch').oninput = e => { state.ui.salesSearch = e.target.value; render(); });
   document.querySelectorAll('[data-adjust-sale]').forEach(b => b.onclick = () => adjustSale(b.dataset.adjustSale, Number(b.dataset.delta)));
   document.querySelectorAll('[data-save-sale]').forEach(b => b.onclick = () => saveSale(b.dataset.saveSale));
-  document.querySelectorAll('[data-clear-sale]').forEach(b => b.onclick = () => clearSale(b.dataset.clearSale));
   $('saveMove') && ($('saveMove').onclick = saveMovement);
   $('saveCount') && ($('saveCount').onclick = saveCount);
   document.querySelectorAll('[data-delete-move]').forEach(b => b.onclick = () => removeRecord('movements', b.dataset.deleteMove));
@@ -605,35 +664,60 @@ async function saveRecipe(e){
 }
 
 function adjustSale(recipeId, delta){
-  const input = $(`qty_${recipeId}`); if(!input) return; const next = Math.max(num(input.value)+delta,0); input.value = next; const badge = $(`badge_${recipeId}`); if(badge) badge.textContent = String(next);
+  const input = $(`qty_${recipeId}`); if(!input) return;
+  const next = Math.max(num(input.value)+delta,0);
+  input.value = next || '';
 }
 
 async function saveSale(recipeId){
-  const qty = num($(`qty_${recipeId}`)?.value); const r = getRecipe(recipeId); if(!r) return alert('ไม่พบสูตร'); const id = saleId(state.ui.date, state.ui.outlet, recipeId);
-  if(qty<=0) { await deleteDoc(dRef('sales', id)); status(`ลบยอดขาย ${r.name} แล้ว`,'warn'); return; }
-  await setDoc(dRef('sales', id), { id, date:state.ui.date, outlet:state.ui.outlet, recipeId, recipeName:r.name, qty, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
+  const qty = num($(`qty_${recipeId}`)?.value);
+  const r = getRecipe(recipeId); if(!r) return alert('ไม่พบสูตร');
+  const id = saleId(state.ui.date, state.ui.outlet, recipeId);
+  if(qty<=0) {
+    await deleteDoc(dRef('sales', id));
+    removeLocalById('sales', id);
+    render();
+    status(`ลบยอดขาย ${r.name} แล้ว`,'warn');
+    return;
+  }
+  const record = { id, date:state.ui.date, outlet:state.ui.outlet, recipeId, recipeName:r.name, qty };
+  await setDoc(dRef('sales', id), { ...record, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
+  upsertLocal('sales', record);
+  render();
   status(`บันทึกยอดขาย ${r.name} = ${qty}`,'ok');
 }
-
-async function clearSale(recipeId){ await deleteDoc(dRef('sales', saleId(state.ui.date, state.ui.outlet, recipeId))); status('ล้างยอดขายแล้ว','warn'); }
 
 async function saveMovement(){
   const liquorId = $('moveLiquor').value, kind = $('moveKind').value, qtyMl = num($('moveQty').value), note = String($('moveNote').value||'').trim();
   if(!liquorId || qtyMl<=0) return alert('กรอก movement ให้ครบ');
   const id = moveId(state.ui.date, state.ui.outlet, liquorId, kind);
-  await setDoc(dRef('movements', id), { id, date:state.ui.date, outlet:state.ui.outlet, liquorId, kind, qtyMl, note, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
-  $('moveQty').value=''; $('moveNote').value=''; status('บันทึก movement เรียบร้อย','ok');
+  const record = { id, date:state.ui.date, outlet:state.ui.outlet, liquorId, kind, qtyMl, note };
+  await setDoc(dRef('movements', id), { ...record, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
+  upsertLocal('movements', record);
+  $('moveQty').value=''; $('moveNote').value='';
+  render();
+  status('บันทึก movement แล้ว และคำนวณใหม่ทันที','ok');
 }
 
 async function saveCount(){
   const liquorId = $('countLiquor').value, actualMl = num($('countActual').value,-1);
   if(!liquorId || actualMl<0) return alert('กรอก actual count ให้ครบ');
   const id = countId(state.ui.date, state.ui.outlet, liquorId);
-  await setDoc(dRef('counts', id), { id, date:state.ui.date, outlet:state.ui.outlet, liquorId, actualMl, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
-  $('countActual').value=''; status('บันทึก actual count เรียบร้อย','ok');
+  const record = { id, date:state.ui.date, outlet:state.ui.outlet, liquorId, actualMl };
+  await setDoc(dRef('counts', id), { ...record, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
+  upsertLocal('counts', record);
+  $('countActual').value='';
+  render();
+  status('บันทึก actual count แล้ว และคำนวณใหม่ทันที','ok');
 }
 
-async function removeRecord(type,id){ if(!confirm('ยืนยันการลบ?')) return; await deleteDoc(dRef(type,id)); status('ลบรายการแล้ว','warn'); }
+async function removeRecord(type,id){
+  if(!confirm('ยืนยันการลบ?')) return;
+  await deleteDoc(dRef(type,id));
+  removeLocalById(type, id);
+  render();
+  status('ลบรายการแล้ว','warn');
+}
 
 function printRequisition(){
   const rep = summaryReport(state.ui.reportDate,state.ui.reportOutlet); const rows = rep.rows.filter(r=>r.gapMl>0.01);
