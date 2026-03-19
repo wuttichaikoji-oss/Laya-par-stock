@@ -1,53 +1,79 @@
-Laya Liquor Usage & Par Cut v1.6.1 — Firebase Cloud Edition
-===========================================================
+Laya Liquor Usage & Par Cut v1.7 Security Edition
+=================================================
 
-เวอร์ชันนี้เพิ่ม **Firebase Setup Wizard** บนหน้าเว็บ
+เวอร์ชันนี้เพิ่มระบบความปลอดภัยหลัก 4 ส่วน
+1) Login แบบ Email/Password
+2) Role-based access: admin / supervisor / staff
+3) Finalize Day + Unlock Day
+4) Audit Log ทุกการเพิ่ม/แก้ไข/soft delete/finalize
 
-หน่อยมี 2 วิธีในการตั้งค่า Firebase
-1) กรอกค่าในหน้าเว็บ แล้วกดบันทึกไว้ใน browser ของเครื่องนั้น
-2) กรอกค่าในหน้าเว็บ แล้วกดดาวน์โหลด `firebase-config.js` เพื่อนำไฟล์ไปแทนของเดิมบนเว็บ
+สิ่งที่ต้องเปิดใน Firebase Console
+-----------------------------------
+1. Authentication > Sign-in method > เปิด Email/Password
+2. ปิด Anonymous ถ้าไม่ต้องการให้ใช้ต่อ
+3. Firestore Database > สร้างฐานข้อมูล ถ้ายังไม่มี
+4. Publish rules จากไฟล์ firestore-rules.txt
 
-ข้อมูลที่เก็บบนคลาวด์
-- Liquor Master
-- Recipe Master
-- Daily Sales Entry
-- Movements (Receive / Transfer / Breakage / Comp / Staff / Adjustment)
-- Actual Count
-- Daily Report / Par Cut ใช้ข้อมูลจาก Firestore โดยตรง
+โครงสร้าง user profile ที่ต้องมี
+--------------------------------
+สร้างเอกสารที่ path:
+  tenants/laya-liquor/users/UID_ของผู้ใช้
 
-ขั้นตอนตั้งค่าแบบสั้น
-1) สร้าง Firebase Project และเพิ่ม Web App
-2) เปิด Firestore Database
-3) เปิด Authentication > Sign-in method > Anonymous
-4) เอา Rules ใน `firestore-rules.txt` ไปวางใน Firestore Rules แล้ว Publish
-5) เปิดเว็บ `index.html`
-6) ไปที่หน้า **Setup Firebase** หรือแท็บ **Settings**
-7) กรอกค่า Firebase จาก Firebase Console
-8) กด **บันทึกใน browser และเชื่อมต่อ**
-9) ถ้าต้องการให้เว็บเครื่องอื่นใช้ config เดียวกัน ให้กด **ดาวน์โหลด firebase-config.js** แล้วอัปโหลดไฟล์นั้นขึ้นเว็บแทนของเดิม
+ตัวอย่างข้อมูล:
+{
+  "displayName": "Noi",
+  "role": "admin",
+  "outlet": "Mangrove",
+  "active": true
+}
 
-ถ้าจะใช้ GitHub Pages
-- อัปโหลดไฟล์ทั้งหมดขึ้น repo / branch ที่ใช้ publish
-- เพิ่มโดเมนของเว็บนั้นใน Firebase Authentication > Authorized domains
+role ที่ใช้ได้:
+- admin
+- supervisor
+- staff
 
-โครงสร้างข้อมูล
-/tenants/{tenantId}/liquors/{liquorId}
-/tenants/{tenantId}/recipes/{recipeId}
-/tenants/{tenantId}/sales/{date_outlet_recipe}
-/tenants/{tenantId}/movements/{date_outlet_liquor_kind}
-/tenants/{tenantId}/counts/{date_outlet_liquor}
+หลักการสิทธิ์
+-------------
+admin
+- ดูได้ทุก outlet
+- เพิ่ม/แก้ master
+- ปลดล็อกวันได้
+- ทำ soft delete ได้
+- ดู audit log ได้
 
-ใช้งานประจำวัน
-- ตั้ง Liquor Master ครั้งแรก
-- ตั้ง Recipe Master ครั้งแรก
-- หลังปิดร้านไปหน้า Daily Entry
-- เลือกวันที่ / outlet
-- คีย์ยอดขายตามกระดาษ
-- เพิ่ม movement ถ้ามี
-- เพิ่ม actual count ถ้ามีนับจริง
-- ไปหน้า Daily Report เพื่อดู usage / variance / par cut และพิมพ์ใบเบิก
+supervisor
+- ดูและคีย์ข้อมูลได้เฉพาะ outlet ตัวเอง
+- เพิ่ม/แก้ Liquor Master และ Recipe ได้ใน outlet ตัวเอง
+- Finalize วันได้
+- ดู audit log ของ outlet ตัวเองได้
 
-หมายเหตุ
-- browser/localStorage setup ใช้สะดวกมากสำหรับเครื่องนี้ทันที
-- ถ้าจะใช้งานหลายเครื่องในทีม แนะนำดาวน์โหลดไฟล์ `firebase-config.js` แล้วอัปโหลดขึ้นเว็บเพื่อให้ทุกคนใช้ config เดียวกัน
-- เวอร์นี้ต้องเปิดผ่าน http/https เช่น GitHub Pages หรือ Firebase Hosting เพื่อใช้งานจริงได้เต็มรูปแบบ
+staff
+- คีย์ยอดขาย / movement / actual count ได้เฉพาะ outlet ตัวเอง
+- ลบไม่ได้
+- แก้ master ไม่ได้
+- ถ้าวันถูก finalize แล้ว แก้ไม่ได้
+
+ขั้นตอนเริ่มใช้งาน
+-------------------
+1. อัปไฟล์ขึ้นเว็บ
+2. เปิดหน้า Settings > Setup Firebase แล้วเชื่อมโปรเจกต์ Firebase
+3. Login ด้วยบัญชี Email/Password
+4. ถ้าล็อกอินแล้วเข้าระบบไม่ได้ ให้เช็กว่ามี user profile ใน Firestore หรือยัง และ active=true หรือไม่
+
+หมายเหตุเรื่องการสร้างผู้ใช้
+----------------------------
+การสร้างบัญชี Email/Password แนะนำให้ทำใน Firebase Authentication Console ก่อน
+แล้วค่อยสร้าง user profile doc ตาม UID ของผู้ใช้นั้นใน Firestore
+
+soft delete
+-----------
+ระบบนี้ไม่ลบข้อมูลจริงสำหรับรายการสำคัญ
+แต่จะ mark เป็น isDeleted=true และบันทึก audit log ไว้
+เพื่อให้ตรวจย้อนหลังได้
+
+Finalize Day
+------------
+เมื่อ Supervisor/Admin กด Finalize วัน
+- sales / movements / counts ของวันนั้นจะถูกล็อก
+- staff และ supervisor จะแก้ไม่ได้
+- admin เท่านั้นที่ปลดล็อกได้
