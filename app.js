@@ -33,6 +33,8 @@ const state = {
     liquorSearch: '',
     recipeSearch: '',
     salesSearch: '',
+    entryDrafts: {},
+    entryReadOnly: false,
     editingLiquor: null,
     editingRecipe: null,
     ingredients: [{ liquorId:'', ml:'' }]
@@ -171,6 +173,27 @@ const saleId = (date,outlet,recipeId) => `${date}_${outlet.replace(/\s+/g,'-')}_
 const moveId = (date,outlet,liquorId,kind) => `${date}_${outlet.replace(/\s+/g,'-')}_${liquorId}_${kind}`;
 const countId = (date,outlet,liquorId) => `${date}_${outlet.replace(/\s+/g,'-')}_${liquorId}`;
 const recipeTypeOptions = (selected) => ['cocktail','shot','mixed drink','wine glass'].map(t => `<option value="${t}" ${selected===t?'selected':''}>${t}</option>`).join('');
+
+function syncEntryDraftsForView(recipes, salesMap){
+  const next = { ...(state.ui.entryDrafts || {}) };
+  const activeIds = new Set(recipes.map(r => r.id));
+  recipes.forEach(r => {
+    if(!(r.id in next)) next[r.id] = salesMap[r.id] ? String(num(salesMap[r.id].qty)) : '';
+  });
+  Object.keys(next).forEach(id => { if(!activeIds.has(id) && !(id in salesMap)) delete next[id]; });
+  state.ui.entryDrafts = next;
+}
+function setEntryReadOnly(flag){
+  state.ui.entryReadOnly = !!flag;
+  document.querySelectorAll('[data-sale-input]').forEach(el => { el.disabled = state.ui.entryReadOnly; });
+  const saveBtn = $('saveAllSales'); if(saveBtn) saveBtn.disabled = state.ui.entryReadOnly;
+  const editBtn = $('toggleEntryEdit'); if(editBtn){
+    editBtn.textContent = state.ui.entryReadOnly ? 'แก้ไขยอดขาย' : 'ล็อกการแก้ไข';
+    editBtn.className = state.ui.entryReadOnly ? 'secondary' : 'gold';
+  }
+  const note = $('entryModeNote');
+  if(note) note.textContent = state.ui.entryReadOnly ? 'บันทึกแล้ว · ถ้าจะเปลี่ยนตัวเลขให้กด “แก้ไขยอดขาย”' : 'กำลังแก้ไข · กรอกตัวเลขให้เสร็จแล้วค่อยกด “บันทึกทั้งหมด”';
+}
 
 function renderTabs(){
   $('tabs').innerHTML = TABS.map(([id,label]) => `<button class="tab ${state.tab===id?'active':''}" data-tab="${id}">${label}</button>`).join('');
@@ -375,32 +398,71 @@ function entryView(){
     .filter(r => r.outlet===state.ui.outlet && r.name.toLowerCase().includes(state.ui.salesSearch.toLowerCase()))
     .sort((a,b)=>a.name.localeCompare(b.name));
   const salesMap = Object.fromEntries(state.data.sales.filter(s=>s.date===state.ui.date && s.outlet===state.ui.outlet).map(s=>[s.recipeId,s]));
+  syncEntryDraftsForView(recipes, salesMap);
   const moves = state.data.movements.filter(m=>m.date===state.ui.date && m.outlet===state.ui.outlet);
   const counts = state.data.counts.filter(c=>c.date===state.ui.date && c.outlet===state.ui.outlet);
   const rep = summaryReport(state.ui.date,state.ui.outlet);
+  const savedCount = Object.values(salesMap).filter(s => num(s.qty) > 0).length;
   return `
-    <section class="entry-layout">
+    <section class="entry-layout compact-entry-layout">
       <div class="card entry-main">
         <div class="section-head">
           <div>
             <h2>Daily Sales Entry</h2>
-            <p class="sub">คีย์ยอดขายจากกระดาษ แล้วบันทึก 1 ครั้งต่อเมนู · ถ้าใส่ 0 แล้วบันทึก ระบบจะลบยอดขายเมนูนั้นออก</p>
+            <p class="sub">คีย์ตัวเลขเองให้ครบก่อน แล้วค่อยกดบันทึกครั้งเดียว · ถ้าใส่ 0 ระบบจะลบยอดขายเมนูนั้นออกเมื่อกดบันทึก</p>
           </div>
           <div class="entry-chip-group">
             <span class="pill">${esc(state.ui.outlet)}</span>
             <span class="pill">${state.ui.date}</span>
           </div>
         </div>
-        <div class="field-grid-4 no-print compact-fields">
-          <div><label>วันที่</label><input id="entryDate" type="date" value="${state.ui.date}"></div>
-          <div><label>Outlet</label><select id="entryOutlet">${outletOptions(state.ui.outlet)}</select></div>
-          <div style="grid-column:span 2"><label>ค้นหาเมนู</label><input id="salesSearch" value="${esc(state.ui.salesSearch)}" placeholder="พิมพ์ชื่อเมนูที่ต้องการคีย์"></div>
+
+        <div class="entry-toolbar no-print">
+          <div class="field-grid-4 compact-fields entry-toolbar-grid">
+            <div><label>วันที่</label><input id="entryDate" type="date" value="${state.ui.date}"></div>
+            <div><label>Outlet</label><select id="entryOutlet">${outletOptions(state.ui.outlet)}</select></div>
+            <div style="grid-column:span 2"><label>ค้นหาเมนู</label><input id="salesSearch" value="${esc(state.ui.salesSearch)}" placeholder="พิมพ์ชื่อเมนูที่ต้องการคีย์"></div>
+          </div>
+          <div class="entry-save-bar">
+            <div>
+              <div class="entry-save-title">บันทึกยอดขายรายวัน</div>
+              <div id="entryModeNote" class="muted">${state.ui.entryReadOnly ? 'บันทึกแล้ว · ถ้าจะเปลี่ยนตัวเลขให้กด “แก้ไขยอดขาย”' : 'กำลังแก้ไข · กรอกตัวเลขให้เสร็จแล้วค่อยกด “บันทึกทั้งหมด”'}</div>
+            </div>
+            <div class="inline-actions">
+              <span class="pill warn">บันทึกแล้ว ${savedCount} เมนู</span>
+              <button id="toggleEntryEdit" class="${state.ui.entryReadOnly ? 'secondary' : 'gold'}">${state.ui.entryReadOnly ? 'แก้ไขยอดขาย' : 'ล็อกการแก้ไข'}</button>
+              <button id="saveAllSales">บันทึกทั้งหมด</button>
+            </div>
+          </div>
         </div>
-        <div class="sales-list" style="margin-top:16px">
-        ${recipes.length ? recipes.map(r=>{
-          const q = num(salesMap[r.id]?.qty);
-          return `<article class="sale-card"><div class="sale-card-top"><div><div class="sale-name">${esc(r.name)}</div><div class="sale-meta">${esc(recipeIngredientsText(r))}</div></div><div class="sale-qty-badge">${fmt(q,0)}</div></div><div class="sale-controls"><div class="stepper"><button class="small secondary" data-adjust-sale="${r.id}" data-delta="-1">-1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="1">+1</button><button class="small secondary" data-adjust-sale="${r.id}" data-delta="5">+5</button></div><div class="sale-input-wrap"><label class="mini-label" for="qty_${r.id}">Qty</label><input id="qty_${r.id}" class="sale-qty-input" type="number" min="0" step="1" value="${q||''}" placeholder="0"></div><button class="sale-save" data-save-sale="${r.id}">บันทึก</button></div></article>`;
-        }).join('') : '<div class="empty">ยังไม่มีสูตรใน outlet นี้</div>'}
+
+        <div class="entry-table-wrap" style="margin-top:16px">
+          <table class="entry-table">
+            <thead>
+              <tr>
+                <th style="width:48px">#</th>
+                <th>เมนู</th>
+                <th>ส่วนผสม</th>
+                <th class="center" style="width:140px">ยอดที่บันทึก</th>
+                <th class="center" style="width:170px">กรอกจำนวนขาย</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${recipes.length ? recipes.map((r, idx)=>{
+                const savedQty = num(salesMap[r.id]?.qty);
+                const draftVal = state.ui.entryDrafts?.[r.id] ?? '';
+                return `<tr>
+                  <td class="center muted">${idx + 1}</td>
+                  <td><div class="entry-menu-name">${esc(r.name)}</div><div class="muted">${esc(r.type || 'cocktail')}</div></td>
+                  <td><div class="entry-ingredient-text">${esc(recipeIngredientsText(r) || '-')}</div></td>
+                  <td class="center"><span class="sale-qty-badge small-badge">${fmt(savedQty,0)}</span></td>
+                  <td>
+                    <input id="qty_${r.id}" data-sale-input="${r.id}" class="entry-qty-input" type="number" min="0" step="1" value="${esc(draftVal)}" placeholder="0" ${state.ui.entryReadOnly ? 'disabled' : ''}>
+                  </td>
+                </tr>`;
+              }).join('') : '<tr><td colspan="5" class="center muted">ยังไม่มีสูตรใน outlet นี้</td></tr>'}
+            </tbody>
+          </table>
         </div>
       </div>
       <aside class="entry-side">
@@ -544,11 +606,12 @@ function bindViewEvents(){
   document.querySelectorAll('[data-edit-recipe]').forEach(b => b.onclick = () => startRecipeEdit(b.dataset.editRecipe));
   document.querySelectorAll('[data-delete-recipe]').forEach(b => b.onclick = () => removeRecord('recipes', b.dataset.deleteRecipe));
 
-  $('entryDate') && ($('entryDate').oninput = e => { state.ui.date = e.target.value; render(); });
-  $('entryOutlet') && ($('entryOutlet').onchange = e => { state.ui.outlet = e.target.value; render(); });
+  $('entryDate') && ($('entryDate').oninput = e => { state.ui.date = e.target.value; state.ui.entryDrafts = {}; state.ui.entryReadOnly = false; render(); });
+  $('entryOutlet') && ($('entryOutlet').onchange = e => { state.ui.outlet = e.target.value; state.ui.entryDrafts = {}; state.ui.entryReadOnly = false; render(); });
   $('salesSearch') && ($('salesSearch').oninput = e => { state.ui.salesSearch = e.target.value; render(); });
-  document.querySelectorAll('[data-adjust-sale]').forEach(b => b.onclick = () => adjustSale(b.dataset.adjustSale, Number(b.dataset.delta)));
-  document.querySelectorAll('[data-save-sale]').forEach(b => b.onclick = () => saveSale(b.dataset.saveSale));
+  document.querySelectorAll('[data-sale-input]').forEach(input => input.oninput = e => { state.ui.entryDrafts[e.target.dataset.saleInput] = e.target.value; });
+  $('saveAllSales') && ($('saveAllSales').onclick = saveAllSales);
+  $('toggleEntryEdit') && ($('toggleEntryEdit').onclick = toggleEntryEditMode);
   $('saveMove') && ($('saveMove').onclick = saveMovement);
   $('saveCount') && ($('saveCount').onclick = saveCount);
   document.querySelectorAll('[data-delete-move]').forEach(b => b.onclick = () => removeRecord('movements', b.dataset.deleteMove));
@@ -663,28 +726,38 @@ async function saveRecipe(e){
   state.ui.editingRecipe = null; state.ui.ingredients = [{liquorId:'',ml:''}]; status('บันทึกสูตรเรียบร้อย','ok');
 }
 
-function adjustSale(recipeId, delta){
-  const input = $(`qty_${recipeId}`); if(!input) return;
-  const next = Math.max(num(input.value)+delta,0);
-  input.value = next || '';
+function toggleEntryEditMode(){
+  setEntryReadOnly(!state.ui.entryReadOnly);
 }
 
-async function saveSale(recipeId){
-  const qty = num($(`qty_${recipeId}`)?.value);
-  const r = getRecipe(recipeId); if(!r) return alert('ไม่พบสูตร');
-  const id = saleId(state.ui.date, state.ui.outlet, recipeId);
-  if(qty<=0) {
-    await deleteDoc(dRef('sales', id));
-    removeLocalById('sales', id);
-    render();
-    status(`ลบยอดขาย ${r.name} แล้ว`,'warn');
-    return;
+async function saveAllSales(){
+  const recipes = state.data.recipes
+    .filter(r => r.outlet===state.ui.outlet && r.name.toLowerCase().includes(state.ui.salesSearch.toLowerCase()))
+    .sort((a,b)=>a.name.localeCompare(b.name));
+  if(!recipes.length) return;
+  const batch = writeBatch(db);
+  let changed = 0;
+  for(const r of recipes){
+    const raw = state.ui.entryDrafts?.[r.id] ?? '';
+    const qty = num(raw);
+    const id = saleId(state.ui.date, state.ui.outlet, r.id);
+    if(qty <= 0){
+      batch.delete(dRef('sales', id));
+      removeLocalById('sales', id);
+      state.ui.entryDrafts[r.id] = '';
+      changed += 1;
+      continue;
+    }
+    const record = { id, date:state.ui.date, outlet:state.ui.outlet, recipeId:r.id, recipeName:r.name, qty };
+    batch.set(dRef('sales', id), { ...record, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
+    upsertLocal('sales', record);
+    state.ui.entryDrafts[r.id] = String(qty);
+    changed += 1;
   }
-  const record = { id, date:state.ui.date, outlet:state.ui.outlet, recipeId, recipeName:r.name, qty };
-  await setDoc(dRef('sales', id), { ...record, updatedAt:serverTimestamp(), createdAt:serverTimestamp() }, { merge:true });
-  upsertLocal('sales', record);
+  await batch.commit();
+  setEntryReadOnly(true);
   render();
-  status(`บันทึกยอดขาย ${r.name} = ${qty}`,'ok');
+  status(changed ? `บันทึกยอดขาย ${changed} เมนูแล้ว และคำนวณใหม่ทันที` : 'ไม่มีรายการให้บันทึก','ok');
 }
 
 async function saveMovement(){

@@ -54,3 +54,23 @@ label{display:block;margin-bottom:6px;color:var(--muted);font-size:.9rem;font-we
   .sale-controls{grid-template-columns:1fr}
   .sale-save{height:auto}
 }
+
+
+/* v1.6.3 compact manual entry */
+.compact-entry-layout{grid-template-columns:minmax(0,1.9fr) minmax(320px,.95fr)}
+.entry-toolbar{display:grid;gap:14px}
+.entry-toolbar-grid{margin-bottom:0}
+.entry-save-bar{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:14px 16px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(180deg,#fff 0,#f8fbff 100%)}
+.entry-save-title{font-size:1rem;font-weight:800;margin-bottom:4px}
+.entry-table-wrap{border:1px solid var(--line);border-radius:18px;overflow:auto;background:#fff}
+.entry-table{width:100%;border-collapse:collapse;font-size:.92rem}
+.entry-table th,.entry-table td{padding:10px 12px;border-bottom:1px solid #edf1f7;vertical-align:middle}
+.entry-table th{background:#f8fbff;color:#30415b;position:sticky;top:0;z-index:1}
+.entry-menu-name{font-weight:800;line-height:1.25}
+.entry-ingredient-text{color:var(--muted);font-size:.84rem;line-height:1.35}
+.entry-qty-input{max-width:120px;margin:0 auto;text-align:center;font-weight:800;padding:10px 12px}
+.small-badge{min-width:40px;height:36px;border-radius:12px;font-size:.95rem}
+#saveAllSales:disabled{opacity:.55;cursor:not-allowed}
+[data-sale-input]:disabled{background:#f6f8fc;color:#51627d}
+@media (max-width:1200px){.compact-entry-layout{grid-template-columns:1fr}.entry-save-bar{flex-direction:column;align-items:flex-start}}
+@media (max-width:720px){.entry-table th:nth-child(3),.entry-table td:nth-child(3){display:none}.entry-qty-input{max-width:100%}}
