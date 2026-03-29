@@ -74,3 +74,21 @@ label{display:block;margin-bottom:6px;color:var(--muted);font-size:.9rem;font-we
 [data-sale-input]:disabled{background:#f6f8fc;color:#51627d}
 @media (max-width:1200px){.compact-entry-layout{grid-template-columns:1fr}.entry-save-bar{flex-direction:column;align-items:flex-start}}
 @media (max-width:720px){.entry-table th:nth-child(3),.entry-table td:nth-child(3){display:none}.entry-qty-input{max-width:100%}}
+
+
+/* v1.6.4 quick/review modes */
+.entry-actions-wrap{justify-content:flex-end}
+.mode-switch{display:inline-flex;align-items:center;gap:4px;padding:4px;border:1px solid var(--line);border-radius:14px;background:#f8fbff}
+.mode-btn{background:transparent;color:var(--muted);border:0;box-shadow:none;padding:8px 12px;border-radius:10px}
+.mode-btn.active{background:var(--accent);color:#fff;box-shadow:var(--shadow)}
+.entry-table-quick .entry-menu-name{font-size:1rem}
+.entry-table-quick .entry-qty-input-quick{max-width:104px}
+.entry-table-quick td,.entry-table-quick th{padding:9px 10px}
+.entry-table-quick .muted{font-size:.82rem}
+.entry-mode-quick .entry-ingredient-text{display:none}
+.entry-table-review .entry-ingredient-text{max-width:520px}
+@media (max-width:900px){
+  .entry-actions-wrap{justify-content:flex-start}
+  .mode-switch{width:100%;justify-content:stretch}
+  .mode-btn{flex:1}
+}

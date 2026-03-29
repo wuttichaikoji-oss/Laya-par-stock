@@ -35,6 +35,7 @@ const state = {
     salesSearch: '',
     entryDrafts: {},
     entryReadOnly: false,
+    entryMode: 'quick',
     editingLiquor: null,
     editingRecipe: null,
     ingredients: [{ liquorId:'', ml:'' }]
@@ -403,13 +404,14 @@ function entryView(){
   const counts = state.data.counts.filter(c=>c.date===state.ui.date && c.outlet===state.ui.outlet);
   const rep = summaryReport(state.ui.date,state.ui.outlet);
   const savedCount = Object.values(salesMap).filter(s => num(s.qty) > 0).length;
+  const quickMode = state.ui.entryMode !== 'review';
   return `
     <section class="entry-layout compact-entry-layout">
       <div class="card entry-main">
         <div class="section-head">
           <div>
             <h2>Daily Sales Entry</h2>
-            <p class="sub">คีย์ตัวเลขเองให้ครบก่อน แล้วค่อยกดบันทึกครั้งเดียว · ถ้าใส่ 0 ระบบจะลบยอดขายเมนูนั้นออกเมื่อกดบันทึก</p>
+            <p class="sub">สลับได้ 2 โหมด · Quick Entry สำหรับคีย์เร็ว และ Review Mode สำหรับตรวจสอบรายละเอียดก่อนบันทึก</p>
           </div>
           <div class="entry-chip-group">
             <span class="pill">${esc(state.ui.outlet)}</span>
@@ -428,7 +430,11 @@ function entryView(){
               <div class="entry-save-title">บันทึกยอดขายรายวัน</div>
               <div id="entryModeNote" class="muted">${state.ui.entryReadOnly ? 'บันทึกแล้ว · ถ้าจะเปลี่ยนตัวเลขให้กด “แก้ไขยอดขาย”' : 'กำลังแก้ไข · กรอกตัวเลขให้เสร็จแล้วค่อยกด “บันทึกทั้งหมด”'}</div>
             </div>
-            <div class="inline-actions">
+            <div class="inline-actions entry-actions-wrap">
+              <div class="mode-switch" role="tablist" aria-label="Entry mode">
+                <button id="entryModeQuick" class="mode-btn ${quickMode ? 'active' : ''}" type="button">Quick Entry</button>
+                <button id="entryModeReview" class="mode-btn ${quickMode ? '' : 'active'}" type="button">Review Mode</button>
+              </div>
               <span class="pill warn">บันทึกแล้ว ${savedCount} เมนู</span>
               <button id="toggleEntryEdit" class="${state.ui.entryReadOnly ? 'secondary' : 'gold'}">${state.ui.entryReadOnly ? 'แก้ไขยอดขาย' : 'ล็อกการแก้ไข'}</button>
               <button id="saveAllSales">บันทึกทั้งหมด</button>
@@ -436,15 +442,14 @@ function entryView(){
           </div>
         </div>
 
-        <div class="entry-table-wrap" style="margin-top:16px">
-          <table class="entry-table">
+        <div class="entry-table-wrap entry-mode-${quickMode ? 'quick' : 'review'}" style="margin-top:16px">
+          <table class="entry-table ${quickMode ? 'entry-table-quick' : 'entry-table-review'}">
             <thead>
               <tr>
                 <th style="width:48px">#</th>
                 <th>เมนู</th>
-                <th>ส่วนผสม</th>
-                <th class="center" style="width:140px">ยอดที่บันทึก</th>
-                <th class="center" style="width:170px">กรอกจำนวนขาย</th>
+                ${quickMode ? '' : '<th>ส่วนผสม</th><th class="center" style="width:140px">ยอดที่บันทึก</th>'}
+                <th class="center" style="width:${quickMode ? '160px' : '170px'}">กรอกจำนวนขาย</th>
               </tr>
             </thead>
             <tbody>
@@ -453,14 +458,16 @@ function entryView(){
                 const draftVal = state.ui.entryDrafts?.[r.id] ?? '';
                 return `<tr>
                   <td class="center muted">${idx + 1}</td>
-                  <td><div class="entry-menu-name">${esc(r.name)}</div><div class="muted">${esc(r.type || 'cocktail')}</div></td>
-                  <td><div class="entry-ingredient-text">${esc(recipeIngredientsText(r) || '-')}</div></td>
-                  <td class="center"><span class="sale-qty-badge small-badge">${fmt(savedQty,0)}</span></td>
                   <td>
-                    <input id="qty_${r.id}" data-sale-input="${r.id}" class="entry-qty-input" type="number" min="0" step="1" value="${esc(draftVal)}" placeholder="0" ${state.ui.entryReadOnly ? 'disabled' : ''}>
+                    <div class="entry-menu-name">${esc(r.name)}</div>
+                    <div class="muted">${esc(r.type || 'cocktail')}${quickMode ? (savedQty > 0 ? ` · บันทึกแล้ว ${fmt(savedQty,0)}` : '') : ''}</div>
+                  </td>
+                  ${quickMode ? '' : `<td><div class="entry-ingredient-text">${esc(recipeIngredientsText(r) || '-')}</div></td><td class="center"><span class="sale-qty-badge small-badge">${fmt(savedQty,0)}</span></td>`}
+                  <td>
+                    <input id="qty_${r.id}" data-sale-input="${r.id}" class="entry-qty-input ${quickMode ? 'entry-qty-input-quick' : ''}" type="number" min="0" step="1" value="${esc(draftVal)}" placeholder="0" ${state.ui.entryReadOnly ? 'disabled' : ''}>
                   </td>
                 </tr>`;
-              }).join('') : '<tr><td colspan="5" class="center muted">ยังไม่มีสูตรใน outlet นี้</td></tr>'}
+              }).join('') : `<tr><td colspan="${quickMode ? '3' : '5'}" class="center muted">ยังไม่มีสูตรใน outlet นี้</td></tr>`}
             </tbody>
           </table>
         </div>
@@ -609,6 +616,8 @@ function bindViewEvents(){
   $('entryDate') && ($('entryDate').oninput = e => { state.ui.date = e.target.value; state.ui.entryDrafts = {}; state.ui.entryReadOnly = false; render(); });
   $('entryOutlet') && ($('entryOutlet').onchange = e => { state.ui.outlet = e.target.value; state.ui.entryDrafts = {}; state.ui.entryReadOnly = false; render(); });
   $('salesSearch') && ($('salesSearch').oninput = e => { state.ui.salesSearch = e.target.value; render(); });
+  $('entryModeQuick') && ($('entryModeQuick').onclick = () => { state.ui.entryMode = 'quick'; render(); });
+  $('entryModeReview') && ($('entryModeReview').onclick = () => { state.ui.entryMode = 'review'; render(); });
   document.querySelectorAll('[data-sale-input]').forEach(input => input.oninput = e => { state.ui.entryDrafts[e.target.dataset.saleInput] = e.target.value; });
   $('saveAllSales') && ($('saveAllSales').onclick = saveAllSales);
   $('toggleEntryEdit') && ($('toggleEntryEdit').onclick = toggleEntryEditMode);
