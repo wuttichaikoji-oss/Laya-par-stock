@@ -92,3 +92,15 @@ label{display:block;margin-bottom:6px;color:var(--muted);font-size:.9rem;font-we
   .mode-switch{width:100%;justify-content:stretch}
   .mode-btn{flex:1}
 }
+
+
+/* v1.6.7 Sales Usage Daily Report */
+.section-gap{margin-top:16px}
+.section-gap-small{margin-top:12px}
+.sales-usage-card .report-subtitle{font-weight:900;color:var(--accent);margin:10px 0 8px;font-size:1rem}
+.kpis-sales-usage{grid-template-columns:repeat(4,minmax(0,1fr))}
+.sales-detail-wrap{max-height:520px}
+.usage-chip-list{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.usage-chip{display:inline-flex;gap:4px;align-items:center;padding:5px 8px;border:1px solid var(--line);border-radius:999px;background:#f8fbff;color:#30415b;font-size:.84rem;line-height:1.25}
+@media (max-width:900px){.kpis-sales-usage{grid-template-columns:1fr 1fr}.usage-chip{border-radius:12px}}
+@media (max-width:620px){.kpis-sales-usage{grid-template-columns:1fr}}

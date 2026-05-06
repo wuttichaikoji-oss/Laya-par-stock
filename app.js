@@ -605,6 +605,105 @@ function entryView(){
 }
 
 
+
+function dailySalesUsageReport(date,outlet){
+  const sales = state.data.sales
+    .filter(s => s.date===date && s.outlet===outlet && num(s.qty) > 0)
+    .sort((a,b)=>(getRecipe(a.recipeId)?.name || a.recipeName || '').localeCompare(getRecipe(b.recipeId)?.name || b.recipeName || ''));
+  const liquorTotals = new Map();
+  const rows = sales.map(s => {
+    const recipe = getRecipe(s.recipeId);
+    const qty = num(s.qty);
+    const ingredients = (recipe?.ingredients || []).map(i => {
+      const liquor = getLiquor(i.liquorId);
+      const mlPerServe = num(i.ml);
+      const totalMl = round(mlPerServe * qty, 2);
+      const key = i.liquorId || `unknown_${recipe?.id || s.recipeId}`;
+      if(!liquorTotals.has(key)) liquorTotals.set(key, { liquorId:i.liquorId, liquor, name:liquor?.name || 'Unknown / Missing Liquor', bottleSizeMl:num(liquor?.bottleSizeMl), totalMl:0, menuItems:[] });
+      const bucket = liquorTotals.get(key);
+      bucket.totalMl = round(bucket.totalMl + totalMl, 2);
+      bucket.menuItems.push({ recipeName: recipe?.name || s.recipeName || s.recipeId || '-', qty, mlPerServe, totalMl });
+      return { liquorId:i.liquorId, liquor, name:liquor?.name || 'Unknown / Missing Liquor', mlPerServe, totalMl };
+    });
+    const totalUsageMl = round(ingredients.reduce((sum,i)=>sum+i.totalMl,0),2);
+    return { sale:s, recipe, recipeName:recipe?.name || s.recipeName || s.recipeId || '-', type:recipe?.type || '-', qty, ingredients, totalUsageMl };
+  });
+  const liquorRows = [...liquorTotals.values()].sort((a,b)=>b.totalMl-a.totalMl || a.name.localeCompare(b.name));
+  return {
+    rows,
+    liquorRows,
+    menuCount: rows.length,
+    totalQty: round(rows.reduce((sum,r)=>sum+r.qty,0),0),
+    totalUsageMl: round(rows.reduce((sum,r)=>sum+r.totalUsageMl,0),2),
+    liquorKinds: liquorRows.length,
+    missingRecipeCount: rows.filter(r=>!r.recipe).length,
+    missingIngredientCount: rows.filter(r=>r.recipe && !r.ingredients.length).length
+  };
+}
+function ingredientBadgesHtml(ingredients, qty){
+  if(!ingredients.length) return '<span class="muted">ยังไม่มีสูตร / ไม่พบส่วนผสมที่ผูกกับเมนูนี้</span>';
+  return `<div class="usage-chip-list">${ingredients.map(i=>`<span class="usage-chip"><strong>${esc(i.name)}</strong> ${fmt(i.mlPerServe,0)} ml × ${fmt(qty,0)} = ${fmt(i.totalMl,0)} ml</span>`).join('')}</div>`;
+}
+function menuContributorHtml(items){
+  if(!items.length) return '<span class="muted">-</span>';
+  return `<div class="usage-chip-list">${items.map(i=>`<span class="usage-chip">${esc(i.recipeName)} · ${fmt(i.qty,0)} แก้ว × ${fmt(i.mlPerServe,0)} ml = <strong>${fmt(i.totalMl,0)} ml</strong></span>`).join('')}</div>`;
+}
+function salesUsageReportHtml(detail){
+  return `
+    <section class="card section-gap sales-usage-card">
+      <div class="section-head tight">
+        <div>
+          <h2>รายงานยอดขายเครื่องดื่มและการใช้เหล้า</h2>
+          <p class="sub">ดึงจากยอดขายรายวันใน Daily Entry แล้วแตกสูตรออกมาเป็นเหล้าที่ใช้จริงต่อเมนูและรวมต่อชนิดเหล้า</p>
+        </div>
+        <span class="pill ok">Daily Sales Usage</span>
+      </div>
+      <div class="kpis kpis-sales-usage">
+        <div class="kpi"><div class="label">เมนูที่ขาย</div><div class="value">${detail.menuCount}</div></div>
+        <div class="kpi"><div class="label">จำนวนขายรวม</div><div class="value">${fmt(detail.totalQty,0)} แก้ว</div></div>
+        <div class="kpi"><div class="label">เหล้าที่ถูกใช้</div><div class="value">${detail.liquorKinds}</div></div>
+        <div class="kpi"><div class="label">ใช้เหล้ารวมจากสูตร</div><div class="value">${fmt(detail.totalUsageMl,0)} ml</div></div>
+      </div>
+      ${(detail.missingRecipeCount || detail.missingIngredientCount) ? `<div class="box-note" style="margin-bottom:12px">มีข้อมูลที่ต้องตรวจสอบ: ไม่พบ Recipe ${detail.missingRecipeCount} รายการ / Recipe ไม่มีส่วนผสม ${detail.missingIngredientCount} รายการ ทำให้การใช้เหล้าอาจไม่ครบ</div>` : ''}
+      <div class="report-subtitle">1) ขายเครื่องดื่มอะไรบ้าง และแต่ละเมนูใช้เหล้าอะไร</div>
+      <div class="table-wrap sales-detail-wrap"><table><thead><tr><th>เมนูเครื่องดื่ม</th><th>ประเภท</th><th class="right">จำนวนขาย</th><th>สูตร / เหล้าที่ใช้</th><th class="right">ใช้รวมต่อเมนู</th></tr></thead><tbody>
+        ${detail.rows.length ? detail.rows.map(r=>`<tr><td><strong>${esc(r.recipeName)}</strong><div class="muted">Recipe ID: ${esc(r.recipe?.id || r.sale.recipeId || '-')}</div></td><td>${esc(r.type)}</td><td class="right"><strong>${fmt(r.qty,0)}</strong></td><td>${ingredientBadgesHtml(r.ingredients, r.qty)}</td><td class="right"><strong>${fmt(r.totalUsageMl,0)} ml</strong></td></tr>`).join('') : '<tr><td colspan="5" class="center muted">ยังไม่มียอดขายเครื่องดื่มสำหรับวันที่และ Outlet นี้</td></tr>'}
+      </tbody></table></div>
+      <div class="report-subtitle section-gap-small">2) สรุปใช้เหล้าอะไรไปเท่าไหร่ แยกตามเมนูที่ดึงใช้</div>
+      <div class="table-wrap sales-detail-wrap"><table><thead><tr><th>เหล้า</th><th class="right">ใช้รวม</th><th class="right">ประมาณกี่ขวด</th><th>มาจากเมนู</th></tr></thead><tbody>
+        ${detail.liquorRows.length ? detail.liquorRows.map(r=>`<tr><td><strong>${esc(r.name)}</strong><div class="muted">Bottle size ${r.bottleSizeMl ? fmt(r.bottleSizeMl,0) : '-'} ml</div></td><td class="right"><strong>${fmt(r.totalMl,0)} ml</strong></td><td class="right">${r.bottleSizeMl ? fmt(r.totalMl/r.bottleSizeMl,2) : '-'} ขวด</td><td>${menuContributorHtml(r.menuItems)}</td></tr>`).join('') : '<tr><td colspan="4" class="center muted">ยังไม่มีการใช้เหล้าจากยอดขายวันนี้</td></tr>'}
+      </tbody></table></div>
+    </section>`;
+}
+function csvEscape(value=''){
+  const s = String(value ?? '');
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+}
+function exportSalesUsageCsv(){
+  const date = state.ui.reportDate, outlet = state.ui.reportOutlet;
+  const detail = dailySalesUsageReport(date,outlet);
+  const lines = [];
+  lines.push(['Section','Date','Outlet','Menu','Type','Qty','Liquor','ML per Serve','Total ML','Bottle Size ML','Bottle Equivalent'].map(csvEscape).join(','));
+  detail.rows.forEach(r => {
+    if(!r.ingredients.length){
+      lines.push(['Menu Detail', date, outlet, r.recipeName, r.type, r.qty, 'No recipe / no ingredients', '', '', '', ''].map(csvEscape).join(','));
+    } else {
+      r.ingredients.forEach(i => lines.push(['Menu Detail', date, outlet, r.recipeName, r.type, r.qty, i.name, i.mlPerServe, i.totalMl, i.liquor?.bottleSizeMl || '', i.liquor?.bottleSizeMl ? round(i.totalMl/num(i.liquor.bottleSizeMl),4) : ''].map(csvEscape).join(',')));
+    }
+  });
+  lines.push('');
+  detail.liquorRows.forEach(r => lines.push(['Liquor Summary', date, outlet, '', '', '', r.name, '', r.totalMl, r.bottleSizeMl || '', r.bottleSizeMl ? round(r.totalMl/r.bottleSizeMl,4) : ''].map(csvEscape).join(',')));
+  downloadTextFile(`laya-sales-usage-${outlet.replace(/\s+/g,'-')}-${date}.csv`, '\ufeff' + lines.join('\n'), 'text/csv;charset=utf-8');
+  status('ดาวน์โหลด CSV รายงานยอดขายและการใช้เหล้าแล้ว','ok');
+}
+function printSalesUsageReport(){
+  const date = state.ui.reportDate, outlet = state.ui.reportOutlet;
+  const detail = dailySalesUsageReport(date,outlet);
+  const win = window.open('', '_blank', 'width=1200,height=850');
+  win.document.write(`<html><head><title>Daily Sales Usage Report</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:12px 0}.kpi{border:1px solid #d7dfeb;border-radius:12px;padding:10px}.label{color:#61728a;font-size:.86rem}.value{font-size:1.15rem;font-weight:800;margin-top:4px}table{width:100%;border-collapse:collapse;margin-top:10px}th,td{border:1px solid #d7dfeb;padding:9px;text-align:left;vertical-align:top}th{background:#f3f7ff}.right{text-align:right}.muted{color:#61728a;font-size:.86rem}.section-title{margin-top:18px;font-weight:900;color:#153b70}.chip{display:inline-block;margin:2px;padding:4px 7px;border:1px solid #d7dfeb;border-radius:999px;background:#f8fbff;font-size:.85rem}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(activeAppOptions.appName)}</div><div>Daily Sales Usage Report</div></div><div><div><strong>Date:</strong> ${date}</div><div><strong>Outlet:</strong> ${esc(outlet)}</div></div></div><div class="kpis"><div class="kpi"><div class="label">Menu Sold</div><div class="value">${detail.menuCount}</div></div><div class="kpi"><div class="label">Qty Sold</div><div class="value">${fmt(detail.totalQty,0)}</div></div><div class="kpi"><div class="label">Liquor Used</div><div class="value">${detail.liquorKinds}</div></div><div class="kpi"><div class="label">Total Usage</div><div class="value">${fmt(detail.totalUsageMl,0)} ml</div></div></div><div class="section-title">1) Beverage Sales Detail</div><table><thead><tr><th>Menu</th><th>Type</th><th>Qty</th><th>Recipe / Liquor Used</th><th>Total Usage</th></tr></thead><tbody>${detail.rows.length ? detail.rows.map(r=>`<tr><td><strong>${esc(r.recipeName)}</strong></td><td>${esc(r.type)}</td><td class="right">${fmt(r.qty,0)}</td><td>${r.ingredients.length ? r.ingredients.map(i=>`<span class="chip">${esc(i.name)} ${fmt(i.mlPerServe,0)} ml × ${fmt(r.qty,0)} = ${fmt(i.totalMl,0)} ml</span>`).join('') : '<span class="muted">No recipe / no ingredients</span>'}</td><td class="right"><strong>${fmt(r.totalUsageMl,0)} ml</strong></td></tr>`).join('') : '<tr><td colspan="5">No sales data</td></tr>'}</tbody></table><div class="section-title">2) Liquor Usage Summary</div><table><thead><tr><th>Liquor</th><th>Total ML</th><th>Bottle Eq.</th><th>Menu Contributors</th></tr></thead><tbody>${detail.liquorRows.length ? detail.liquorRows.map(r=>`<tr><td><strong>${esc(r.name)}</strong><div class="muted">Bottle ${r.bottleSizeMl ? fmt(r.bottleSizeMl,0) : '-'} ml</div></td><td class="right">${fmt(r.totalMl,0)} ml</td><td class="right">${r.bottleSizeMl ? fmt(r.totalMl/r.bottleSizeMl,2) : '-'} bottles</td><td>${r.menuItems.map(i=>`<span class="chip">${esc(i.recipeName)} ${fmt(i.qty,0)} × ${fmt(i.mlPerServe,0)} = ${fmt(i.totalMl,0)} ml</span>`).join('')}</td></tr>`).join('') : '<tr><td colspan="4">No liquor usage</td></tr>'}</tbody></table></body></html>`);
+  win.document.close(); win.focus(); win.print();
+}
+
 function pendingTraceTableHtml(rep){
   const pendingRows = rep.rows.filter(r => r.gapMl > 0.01).sort((a,b)=>(a.pendingSince||'9999').localeCompare(b.pendingSince||'9999') || b.gapMl-a.gapMl);
   return `
@@ -627,19 +726,25 @@ function pendingTraceTableHtml(rep){
 
 function reportView(){
   const rep = summaryReport(state.ui.reportDate,state.ui.reportOutlet);
+  const salesDetail = dailySalesUsageReport(state.ui.reportDate,state.ui.reportOutlet);
   return `
     <section class="card">
       <div class="field-grid-4 no-print">
         <div><label>วันที่</label><input id="reportDate" type="date" value="${state.ui.reportDate}"></div>
         <div><label>Outlet</label><select id="reportOutlet">${outletOptions(state.ui.reportOutlet)}</select></div>
-        <div class="box-note" style="grid-column:span 2">รายงานนี้ sync จาก Firestore แบบทันที ถ้ามีเครื่องอื่นคีย์ข้อมูล รายงานจะอัปเดตตาม</div>
+        <div class="box-note" style="grid-column:span 2">รายงานนี้ sync จาก Firestore แบบทันที ถ้ามีเครื่องอื่นคีย์ข้อมูล รายงานจะอัปเดตตาม · เลือกวันที่เพื่อดึงรายงานแบบวันต่อวัน</div>
       </div>
-      <div class="inline-actions no-print" style="justify-content:flex-end;margin:12px 0"><button id="printReq" class="gold">พิมพ์ใบเบิก</button></div>
+      <div class="inline-actions no-print" style="justify-content:flex-end;margin:12px 0">
+        <button id="printSalesUsage" class="gold">พิมพ์รายงานยอดขาย/ใช้เหล้า</button>
+        <button id="exportSalesUsageCsv" class="secondary">Export CSV ยอดขาย/ใช้เหล้า</button>
+        <button id="printReq" class="secondary">พิมพ์ใบเบิก</button>
+      </div>
       <div class="kpis"><div class="kpi"><div class="label">ใช้เหล้ารวม</div><div class="value">${fmt(rep.totalUsage,0)} ml</div></div><div class="kpi"><div class="label">Par Gap รวม</div><div class="value">${fmt(rep.totalGap,0)} ml</div></div><div class="kpi"><div class="label">ต่ำกว่า Par</div><div class="value">${rep.lowPar}</div></div><div class="kpi"><div class="label">มี Variance</div><div class="value">${rep.varianceCount}</div></div></div>
       <div class="table-wrap"><table><thead><tr><th>Liquor</th><th class="right">Opening</th><th class="right">Used</th><th class="right">Receive</th><th class="right">Loss</th><th class="right">Theo</th><th class="right">Actual</th><th class="right">Variance</th><th class="right">Par Gap</th><th>ค้างจากวันที่</th><th>ฐานคำนวณ</th><th class="right">Refill</th></tr></thead><tbody>
       ${rep.rows.length ? rep.rows.map(r=>`<tr><td><strong>${esc(r.liquor.name)}</strong><div class="muted">${esc(r.liquor.outlet)}</div></td><td class="right">${fmt(r.openingMl,0)}</td><td class="right">${fmt(r.usageMl,0)}</td><td class="right">${fmt(r.receive,0)}</td><td class="right">${fmt(r.loss,0)}</td><td class="right">${fmt(r.theo,0)}</td><td class="right">${r.actual===null?'-':fmt(r.actual,0)}</td><td class="right ${r.variance===null?'':(r.variance<0?'danger-text':r.variance>0?'warn-text':'ok-text')}">${r.variance===null?'-':fmt(r.variance,0)}</td><td class="right ${r.gapMl>0?'warn-text':'ok-text'}">${fmt(r.gapMl,0)}</td><td>${r.gapMl>0?esc(r.pendingLabel):'-'}</td><td>${esc(r.baseLabel)}</td><td class="right">${fmt(r.refillBottles,2)} ขวด</td></tr>`).join('') : '<tr><td colspan="12" class="center muted">ยังไม่มีข้อมูล</td></tr>'}
       </tbody></table></div>
     </section>
+    ${salesUsageReportHtml(salesDetail)}
     ${pendingTraceTableHtml(rep)}`;
 }
 
@@ -753,6 +858,8 @@ function bindViewEvents(){
   $('reportDate') && ($('reportDate').oninput = e => { state.ui.reportDate = e.target.value; render(); });
   $('reportOutlet') && ($('reportOutlet').onchange = e => { state.ui.reportOutlet = e.target.value; render(); });
   $('printReq') && ($('printReq').onclick = printRequisition);
+  $('printSalesUsage') && ($('printSalesUsage').onclick = printSalesUsageReport);
+  $('exportSalesUsageCsv') && ($('exportSalesUsageCsv').onclick = exportSalesUsageCsv);
 }
 
 async function saveSetupAndConnect(e){
