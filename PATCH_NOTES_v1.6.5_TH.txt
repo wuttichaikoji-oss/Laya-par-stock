@@ -1,0 +1,17 @@
+Laya Liquor Usage & Par Cut v1.6.5
+Patch: Copy Mangrove Master Data to The Taste
+
+สิ่งที่เพิ่ม:
+1) เพิ่มปุ่ม Settings > Outlet Master Data Tools > Copy Mangrove → The Taste
+2) ปุ่มนี้จะคัดลอก Liquor Master จาก Mangrove ไป The Taste
+3) ปุ่มนี้จะคัดลอก Recipe Master/สูตร จาก Mangrove ไป The Taste
+4) ระบบ remap ingredients ในสูตรอัตโนมัติ เพื่อให้สูตรของ The Taste อ้างอิง liquor ID ชุด The Taste ไม่ใช่ liquor ID ของ Mangrove
+5) ใช้ document ID แบบคงที่ เช่น liquor_the_taste_xxx และ recipe_the_taste_xxx จึงกดซ้ำได้โดยไม่สร้างชุดซ้ำหลายรอบ
+6) ไม่ลบข้อมูล The Taste เดิมที่เพิ่มเองไว้ แต่รายการที่เคย copy จาก Mangrove จะถูกอัปเดตให้ตรง Mangrove ล่าสุด
+
+วิธีใช้หลัง deploy:
+1) เข้าเว็บ
+2) ไปที่ Settings
+3) เลื่อนลงมาที่ Outlet Master Data Tools
+4) กด Copy Mangrove → The Taste
+5) กลับไปที่ Liquor Master / Recipe Master แล้วเลือก Outlet = The Taste เพื่อตรวจสอบ

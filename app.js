@@ -1,6 +1,6 @@
 import { initializeApp, deleteApp } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js';
 import { getAuth, onAuthStateChanged, signInAnonymously } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-auth.js';
-import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, serverTimestamp, writeBatch } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js';
+import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, getDocs, serverTimestamp, writeBatch } from 'https://www.gstatic.com/firebasejs/12.10.0/firebase-firestore.js';
 
 const OUTLETS = ['Mangrove', 'The Taste'];
 const TABS = [
@@ -158,6 +158,14 @@ const liquorOptions = (selected,outletOnly=false) => `<option value="">-- เล
   .sort((a,b)=>a.name.localeCompare(b.name))
   .map(l => `<option value="${l.id}" ${l.id===selected?'selected':''}>${esc(l.name)}${outletOnly?'':` · ${esc(l.outlet)}`}</option>`).join('');
 const recipeIngredientsText = (r) => (r.ingredients||[]).map(i => `${getLiquor(i.liquorId)?.name||'Unknown'} ${fmt(i.ml,0)} ml`).join(', ');
+function safeDocIdPart(value=''){
+  return String(value || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || Math.random().toString(36).slice(2,10);
+}
+const copiedOutletDocId = (targetOutlet, sourceId, prefix) => `${prefix}_${safeDocIdPart(targetOutlet).toLowerCase()}_${safeDocIdPart(sourceId)}`;
+
 const movementLabel = (k) => ({receive:'Receive',transferIn:'Transfer In',transferOut:'Transfer Out',breakage:'Breakage',comp:'Complimentary',staff:'Staff Drink',adjust:'Adjustment'})[k] || k;
 const upsertLocal = (type, record) => {
   const list = state.data[type] || (state.data[type] = []);
@@ -546,6 +554,10 @@ function reportView(){
 }
 
 function settingsView(){
+  const mangroveLiquors = state.data.liquors.filter(l => l.outlet === 'Mangrove').length;
+  const tasteLiquors = state.data.liquors.filter(l => l.outlet === 'The Taste').length;
+  const mangroveRecipes = state.data.recipes.filter(r => r.outlet === 'Mangrove').length;
+  const tasteRecipes = state.data.recipes.filter(r => r.outlet === 'The Taste').length;
   return `
     ${setupWizardHtml()}
     <section class="grid grid-2">
@@ -565,8 +577,29 @@ function settingsView(){
         <tr><td>movements</td><td>${state.data.movements.length}</td></tr>
         <tr><td>counts</td><td>${state.data.counts.length}</td></tr>
       </tbody></table></div><div class="box-note" style="margin-top:16px">ข้อมูลของเวอร์ชันนี้เก็บใน Firestore ทั้งหมด ไม่ได้เก็บแค่ localStorage</div></div>
+    </section>
+    <section class="card">
+      <div class="section-head tight">
+        <div>
+          <h2>Outlet Master Data Tools</h2>
+          <p class="sub">คัดลอกรายการเหล้าและสูตรจาก Mangrove ไป The Taste พร้อมเชื่อมส่วนผสมในสูตรให้ถูก outlet</p>
+        </div>
+      </div>
+      <div class="field-grid-4">
+        <div class="kpi"><div class="label">Mangrove Liquor</div><div class="value">${mangroveLiquors}</div></div>
+        <div class="kpi"><div class="label">The Taste Liquor</div><div class="value">${tasteLiquors}</div></div>
+        <div class="kpi"><div class="label">Mangrove Recipes</div><div class="value">${mangroveRecipes}</div></div>
+        <div class="kpi"><div class="label">The Taste Recipes</div><div class="value">${tasteRecipes}</div></div>
+      </div>
+      <div class="box-note" style="margin-top:16px">
+        ปุ่มนี้จะสร้าง/อัปเดตข้อมูลฝั่ง The Taste โดยใช้รหัสเอกสารใหม่แบบคงที่ เช่น <code>liquor_the_taste_...</code> และ <code>recipe_the_taste_...</code> จึงกดซ้ำได้โดยไม่สร้างรายการซ้ำหลายชุด แต่จะไม่ลบข้อมูล The Taste เดิมที่เพิ่มเองไว้
+      </div>
+      <div class="inline-actions" style="margin-top:16px">
+        <button id="btnCopyMangroveToTaste" class="gold">Copy Mangrove → The Taste</button>
+      </div>
     </section>`;
 }
+
 
 function render(){
   renderTabs();
@@ -589,6 +622,7 @@ function bindViewEvents(){
   $('btnTestSetup') && ($('btnTestSetup').onclick = testSetupConnection);
   $('btnDownloadConfig') && ($('btnDownloadConfig').onclick = downloadConfigFromWizard);
   $('btnClearStoredConfig') && ($('btnClearStoredConfig').onclick = clearStoredConfig);
+  $('btnCopyMangroveToTaste') && ($('btnCopyMangroveToTaste').onclick = copyMangroveToTheTaste);
   $('dashDate') && ($('dashDate').oninput = e => { state.ui.dashDate = e.target.value; render(); });
   $('dashOutlet') && ($('dashOutlet').onchange = e => { state.ui.dashOutlet = e.target.value; render(); });
 
@@ -807,6 +841,83 @@ function printRequisition(){
   win.document.write(`<html><head><title>Par Requisition</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dfeb;padding:10px;text-align:left}th{background:#f3f7ff}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px}.box{padding-top:24px;border-top:1px solid #8ea2c0;text-align:center}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(activeAppOptions.appName)}</div><div>Par Requisition Form</div></div><div><div><strong>Date:</strong> ${state.ui.reportDate}</div><div><strong>Outlet:</strong> ${esc(state.ui.reportOutlet)}</div></div></div><table><thead><tr><th>Liquor</th><th>Closing Base (ml)</th><th>Par (ml)</th><th>Gap (ml)</th><th>Suggested Refill (Bottle)</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.liquor.name)}</td><td>${fmt(r.actual===null?r.theo:r.actual,0)}</td><td>${fmt(r.parMl,0)}</td><td>${fmt(r.gapMl,0)}</td><td>${fmt(r.refillBottles,2)}</td></tr>`).join(''):'<tr><td colspan="5">ไม่มีรายการต่ำกว่า Par</td></tr>'}</tbody></table><div class="sign"><div class="box">Prepared By</div><div class="box">Checked By</div><div class="box">Approved By</div></div></body></html>`);
   win.document.close(); win.focus(); win.print();
 }
+
+async function commitInChunks(writeOps, chunkSize=450){
+  let committed = 0;
+  for(let i=0; i<writeOps.length; i+=chunkSize){
+    const batch = writeBatch(db);
+    const chunk = writeOps.slice(i, i+chunkSize);
+    chunk.forEach(op => batch.set(op.ref, op.data, { merge:true }));
+    await batch.commit();
+    committed += chunk.length;
+  }
+  return committed;
+}
+
+async function copyMangroveToTheTaste(){
+  if(!db) return alert('Firebase ยังไม่พร้อม');
+  if(!confirm(`ยืนยันคัดลอก Liquor Master และ Recipe Master จาก Mangrove ไป The Taste?
+
+ระบบจะไม่ลบข้อมูล The Taste เดิม แต่จะอัปเดตรายการที่เคยคัดลอกไว้ให้เป็นข้อมูลล่าสุดจาก Mangrove`)) return;
+  status('กำลังอ่านข้อมูล Mangrove จาก Firebase...','warn');
+  try {
+    const [liquorSnap, recipeSnap] = await Promise.all([getDocs(cRef('liquors')), getDocs(cRef('recipes'))]);
+    const liquors = mapSnap(liquorSnap).filter(l => l.outlet === 'Mangrove');
+    const recipes = mapSnap(recipeSnap).filter(r => r.outlet === 'Mangrove');
+    if(!liquors.length && !recipes.length) return alert('ยังไม่มีข้อมูล Mangrove ให้คัดลอก');
+
+    const liquorIdMap = Object.fromEntries(liquors.map(l => [l.id, copiedOutletDocId('The Taste', l.id, 'liquor')]));
+    const writeOps = [];
+
+    liquors.forEach(source => {
+      const id = liquorIdMap[source.id];
+      const payload = {
+        ...source,
+        id,
+        outlet: 'The Taste',
+        copiedFromOutlet: 'Mangrove',
+        copiedFromId: source.id,
+        copiedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      delete payload.createdAt;
+      writeOps.push({ ref: dRef('liquors', id), data: payload });
+    });
+
+    recipes.forEach(source => {
+      const id = copiedOutletDocId('The Taste', source.id, 'recipe');
+      const ingredients = (source.ingredients || []).map(i => ({
+        ...i,
+        liquorId: liquorIdMap[i.liquorId] || i.liquorId,
+        sourceLiquorId: i.liquorId
+      }));
+      const payload = {
+        ...source,
+        id,
+        outlet: 'The Taste',
+        ingredients,
+        copiedFromOutlet: 'Mangrove',
+        copiedFromId: source.id,
+        copiedAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      };
+      delete payload.createdAt;
+      writeOps.push({ ref: dRef('recipes', id), data: payload });
+    });
+
+    await commitInChunks(writeOps);
+    state.ui.outlet = 'The Taste';
+    state.ui.reportOutlet = 'The Taste';
+    state.ui.dashOutlet = 'The Taste';
+    status(`คัดลอกสำเร็จ: Liquor ${liquors.length} รายการ และ Recipe ${recipes.length} สูตร จาก Mangrove ไป The Taste แล้ว`, 'ok');
+    render();
+  } catch(err) {
+    console.error(err);
+    status(`คัดลอกไม่สำเร็จ: ${err.message}`, 'danger');
+    alert(`คัดลอกไม่สำเร็จ: ${err.message}`);
+  }
+}
+
 
 async function exportJson(){
   const blob = new Blob([JSON.stringify({tenantId:activeAppOptions.tenantId, exportedAt:new Date().toISOString(), data:state.data}, null, 2)], {type:'application/json'});
