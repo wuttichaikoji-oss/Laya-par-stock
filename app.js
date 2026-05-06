@@ -224,57 +224,125 @@ function setupView(){
   bindViewEvents();
 }
 
+function dateTs(d=''){
+  const t = Date.parse(`${d}T00:00:00`);
+  return Number.isFinite(t) ? t : null;
+}
+function daysInclusive(fromDate, toDate){
+  const a = dateTs(fromDate), b = dateTs(toDate);
+  if(a===null || b===null || b<a) return null;
+  return Math.floor((b-a)/86400000) + 1;
+}
+function dateLabel(date, fallback='-'){
+  return date ? date : fallback;
+}
+function blankMoveTotals(){ return {receive:0,transferIn:0,transferOut:0,breakage:0,comp:0,staff:0,adjust:0}; }
+function addMoveTotals(target, source={}){
+  Object.keys(blankMoveTotals()).forEach(k => target[k] = num(target[k]) + num(source[k]));
+  return target;
+}
+function movementTotalsForDate(liquorId, date, outlet){
+  const t = blankMoveTotals();
+  state.data.movements.filter(m=>m.liquorId===liquorId && m.outlet===outlet && m.date===date).forEach(m => t[m.kind] = num(t[m.kind]) + num(m.qtyMl));
+  return t;
+}
+function usageForDate(liquorId, date, outlet){
+  let t = 0;
+  state.data.sales.filter(s=>s.outlet===outlet && s.date===date).forEach(s => {
+    const r = getRecipe(s.recipeId); if(!r) return;
+    (r.ingredients||[]).forEach(i => { if(i.liquorId===liquorId) t += num(i.ml) * num(s.qty); });
+  });
+  return t;
+}
+function usageBetweenDates(liquorId, fromDate, toDate, outlet){
+  let t = 0;
+  const relevant = [...new Set(state.data.sales.filter(s=>s.outlet===outlet && s.date>fromDate && s.date<toDate).map(s=>s.date))];
+  relevant.forEach(d => { t += usageForDate(liquorId, d, outlet); });
+  return t;
+}
+function movementsBetweenDates(liquorId, fromDate, toDate, outlet){
+  const t = blankMoveTotals();
+  state.data.movements.filter(m=>m.liquorId===liquorId && m.outlet===outlet && m.date>fromDate && m.date<toDate).forEach(m => t[m.kind]=num(t[m.kind])+num(m.qtyMl));
+  return t;
+}
+function getCountForDate(liquorId, date, outlet){
+  return state.data.counts.find(c => c.liquorId===liquorId && c.outlet===outlet && c.date===date) || null;
+}
+function getPreviousCount(liquorId, date, outlet){
+  return state.data.counts.filter(c => c.liquorId===liquorId && c.outlet===outlet && c.date<date).sort((a,b)=>b.date.localeCompare(a.date))[0] || null;
+}
+function liquorCloseSnapshot(liquor, date, outlet){
+  const prev = getPreviousCount(liquor.id, date, outlet);
+  const baseDate = prev ? prev.date : '';
+  const base = prev ? num(prev.actualMl) : num(liquor.openingMl);
+  const carryMoves = movementsBetweenDates(liquor.id, baseDate, date, outlet);
+  const carryUse = usageBetweenDates(liquor.id, baseDate, date, outlet);
+  const openingMl = base + carryMoves.receive + carryMoves.transferIn + carryMoves.adjust - carryMoves.transferOut - carryMoves.breakage - carryMoves.comp - carryMoves.staff - carryUse;
+  const mv = movementTotalsForDate(liquor.id, date, outlet);
+  const usageMl = usageForDate(liquor.id, date, outlet);
+  const theo = openingMl + mv.receive + mv.transferIn + mv.adjust - mv.transferOut - mv.breakage - mv.comp - mv.staff - usageMl;
+  const count = getCountForDate(liquor.id, date, outlet);
+  const actual = count ? num(count.actualMl) : null;
+  const closeBase = actual===null ? theo : actual;
+  const parMl = num(liquor.parBottles) * num(liquor.bottleSizeMl);
+  const gapMl = Math.max(parMl - closeBase, 0);
+  return {
+    prev, count, baseDate,
+    baseSource: prev ? `Actual Count ${prev.date}` : 'Opening Master',
+    baseSourceDate: prev ? prev.date : '',
+    openingMl:round(openingMl,2), usageMl:round(usageMl,2), mv,
+    receive:round(mv.receive + mv.transferIn + mv.adjust,2),
+    loss:round(mv.transferOut + mv.breakage + mv.comp + mv.staff,2),
+    theo:round(theo,2), actual:actual===null?null:round(actual,2),
+    closeBase:round(closeBase,2), variance:actual===null?null:round(actual - theo,2),
+    gapMl:round(gapMl,2), parMl:round(parMl,2),
+    refillBottles: round(num(liquor.bottleSizeMl)? gapMl/num(liquor.bottleSizeMl):0, 2)
+  };
+}
+function affectedDatesForLiquor(liquorId, outlet, toDate){
+  const dates = new Set([toDate]);
+  state.data.counts.filter(c=>c.liquorId===liquorId && c.outlet===outlet && c.date<=toDate).forEach(c=>dates.add(c.date));
+  state.data.movements.filter(m=>m.liquorId===liquorId && m.outlet===outlet && m.date<=toDate).forEach(m=>dates.add(m.date));
+  state.data.sales.filter(s=>s.outlet===outlet && s.date<=toDate).forEach(s=>{
+    const r = getRecipe(s.recipeId); if(!r) return;
+    if((r.ingredients||[]).some(i=>i.liquorId===liquorId)) dates.add(s.date);
+  });
+  return [...dates].filter(Boolean).sort((a,b)=>a.localeCompare(b));
+}
+function pendingTraceForLiquor(liquor, date, outlet, targetSnap){
+  const snap = targetSnap || liquorCloseSnapshot(liquor, date, outlet);
+  if(snap.gapMl <= 0.01) {
+    return { pendingSince:'', pendingLabel:'-', pendingDays:null, baseLabel:snap.baseSource, todayReason:'ไม่ต่ำกว่า Par' };
+  }
+  const dates = affectedDatesForLiquor(liquor.id, outlet, date);
+  let currentStart = '';
+  dates.forEach(d => {
+    const daySnap = liquorCloseSnapshot(liquor, d, outlet);
+    if(daySnap.gapMl > 0.01) currentStart = currentStart || d;
+    else currentStart = '';
+  });
+  const pendingSince = currentStart || snap.count?.date || snap.prev?.date || '';
+  const pendingDays = pendingSince ? daysInclusive(pendingSince, date) : null;
+  const pendingLabel = pendingSince ? `${pendingSince}${pendingDays ? ` · ${pendingDays} วัน` : ''}` : 'Opening Master';
+  const todayReason = snap.actual!==null
+    ? `ตัดจาก Actual Count วันนี้ ${fmt(snap.actual,0)} ml`
+    : `ยังไม่มี Actual วันนี้ ใช้ Theo จาก ${snap.baseSource}`;
+  return { pendingSince, pendingLabel, pendingDays, baseLabel:snap.baseSource, todayReason };
+}
 function summaryReport(date,outlet){
   const liquors = state.data.liquors.filter(l=>l.outlet===outlet).sort((a,b)=>a.name.localeCompare(b.name));
-  const usageMap = {};
-  state.data.sales.filter(s=>s.date===date && s.outlet===outlet).forEach(s => {
-    const r = getRecipe(s.recipeId); if(!r) return;
-    (r.ingredients||[]).forEach(i => usageMap[i.liquorId] = num(usageMap[i.liquorId]) + (num(i.ml) * num(s.qty)));
-  });
-  const moveMap = {};
-  state.data.movements.filter(m=>m.date===date && m.outlet===outlet).forEach(m => {
-    moveMap[m.liquorId] ||= {receive:0,transferIn:0,transferOut:0,breakage:0,comp:0,staff:0,adjust:0};
-    moveMap[m.liquorId][m.kind] = num(moveMap[m.liquorId][m.kind]) + num(m.qtyMl);
-  });
-  const countMap = Object.fromEntries(state.data.counts.filter(c=>c.date===date && c.outlet===outlet).map(c=>[c.liquorId,num(c.actualMl)]));
-  const previousCount = (liquorId) => state.data.counts.filter(c => c.liquorId===liquorId && c.outlet===outlet && c.date<date).sort((a,b)=>b.date.localeCompare(a.date))[0] || null;
-  const usageBetween = (liquorId, fromDate, toDate) => {
-    let t = 0;
-    const relevant = [...new Set(state.data.sales.filter(s=>s.outlet===outlet && s.date>fromDate && s.date<toDate).map(s=>s.date))];
-    relevant.forEach(d => {
-      state.data.sales.filter(s=>s.outlet===outlet && s.date===d).forEach(s => {
-        const r = getRecipe(s.recipeId); if(!r) return;
-        (r.ingredients||[]).forEach(i => { if(i.liquorId===liquorId) t += num(i.ml)*num(s.qty); });
-      });
-    });
-    return t;
-  };
-  const moveBetween = (liquorId, fromDate, toDate) => {
-    const t = {receive:0,transferIn:0,transferOut:0,breakage:0,comp:0,staff:0,adjust:0};
-    state.data.movements.filter(m=>m.liquorId===liquorId && m.outlet===outlet && m.date>fromDate && m.date<toDate).forEach(m => t[m.kind]+=num(m.qtyMl));
-    return t;
-  };
   const rows = liquors.map(liquor => {
-    const prev = previousCount(liquor.id);
-    const baseDate = prev ? prev.date : '';
-    const base = prev ? num(prev.actualMl) : num(liquor.openingMl);
-    const carryMoves = moveBetween(liquor.id, baseDate, date);
-    const carryUse = usageBetween(liquor.id, baseDate, date);
-    const openingMl = base + carryMoves.receive + carryMoves.transferIn + carryMoves.adjust - carryMoves.transferOut - carryMoves.breakage - carryMoves.comp - carryMoves.staff - carryUse;
-    const mv = moveMap[liquor.id] || {receive:0,transferIn:0,transferOut:0,breakage:0,comp:0,staff:0,adjust:0};
-    const usageMl = num(usageMap[liquor.id]);
-    const theo = openingMl + mv.receive + mv.transferIn + mv.adjust - mv.transferOut - mv.breakage - mv.comp - mv.staff - usageMl;
-    const actual = Number.isFinite(countMap[liquor.id]) ? countMap[liquor.id] : null;
-    const closeBase = actual===null ? theo : actual;
-    const parMl = num(liquor.parBottles) * num(liquor.bottleSizeMl);
-    const gapMl = Math.max(parMl - closeBase, 0);
+    const snap = liquorCloseSnapshot(liquor, date, outlet);
+    const trace = pendingTraceForLiquor(liquor, date, outlet, snap);
     return {
-      liquor, openingMl:round(openingMl,2), usageMl:round(usageMl,2),
-      receive:round(mv.receive + mv.transferIn + mv.adjust,2),
-      loss:round(mv.transferOut + mv.breakage + mv.comp + mv.staff,2),
-      theo:round(theo,2), actual:actual===null?null:round(actual,2),
-      variance:actual===null?null:round(actual - theo,2), gapMl:round(gapMl,2), parMl:round(parMl,2),
-      refillBottles: round(num(liquor.bottleSizeMl)? gapMl/num(liquor.bottleSizeMl):0, 2)
+      liquor, ...snap,
+      pendingSince: trace.pendingSince,
+      pendingLabel: trace.pendingLabel,
+      pendingDays: trace.pendingDays,
+      baseLabel: trace.baseLabel,
+      todayReason: trace.todayReason,
+      lastActualDate: snap.count?.date || snap.prev?.date || '',
+      hasActualToday: snap.actual!==null
     };
   });
   return {
@@ -314,8 +382,8 @@ function dashboardView(){
         <h2>ต้องจับตา</h2>
         <p class="sub">รายการที่มีการใช้หรือขาดจาก Par</p>
         <div class="table-wrap">
-          <table><thead><tr><th>Liquor</th><th class="right">Used</th><th class="right">Par Gap</th></tr></thead><tbody>
-          ${rep.rows.filter(r=>r.usageMl>0||r.gapMl>0).length ? rep.rows.filter(r=>r.usageMl>0||r.gapMl>0).map(r=>`<tr><td>${esc(r.liquor.name)}</td><td class="right">${fmt(r.usageMl,0)} ml</td><td class="right ${r.gapMl>0?'warn-text':'ok-text'}">${fmt(r.gapMl,0)} ml</td></tr>`).join('') : '<tr><td colspan="3" class="center muted">ยังไม่มีข้อมูล</td></tr>'}
+          <table><thead><tr><th>Liquor</th><th class="right">Used</th><th class="right">Par Gap</th><th>ค้างจากวันที่</th></tr></thead><tbody>
+          ${rep.rows.filter(r=>r.usageMl>0||r.gapMl>0).length ? rep.rows.filter(r=>r.usageMl>0||r.gapMl>0).map(r=>`<tr><td>${esc(r.liquor.name)}</td><td class="right">${fmt(r.usageMl,0)} ml</td><td class="right ${r.gapMl>0?'warn-text':'ok-text'}">${fmt(r.gapMl,0)} ml</td><td>${r.gapMl>0?esc(r.pendingLabel):'-'}</td></tr>`).join('') : '<tr><td colspan="4" class="center muted">ยังไม่มีข้อมูล</td></tr>'}
           </tbody></table>
         </div>
       </div>
@@ -536,6 +604,27 @@ function entryView(){
     </section>`;
 }
 
+
+function pendingTraceTableHtml(rep){
+  const pendingRows = rep.rows.filter(r => r.gapMl > 0.01).sort((a,b)=>(a.pendingSince||'9999').localeCompare(b.pendingSince||'9999') || b.gapMl-a.gapMl);
+  return `
+    <div class="card section-gap report-trace-card">
+      <div class="section-head tight">
+        <div>
+          <h2>Trace Back รายการ Par ค้าง</h2>
+          <p class="sub">ใช้ดูว่าตัวเลขที่ยังค้างอยู่เริ่มต่ำกว่า Par จากวันไหน และฐานคำนวณมาจาก Actual Count วันไหน</p>
+        </div>
+        <span class="pill warn">${pendingRows.length} รายการค้าง</span>
+      </div>
+      <div class="box-note" style="margin-bottom:12px">
+        ถ้าแถวไหนขึ้นว่า “ยังไม่มี Actual วันนี้” แปลว่าระบบคำนวณจากยอด Theo ต่อจาก Actual Count ล่าสุด/Opening Master ยังไม่ได้ยืนยันด้วยการนับจริงของวันที่เลือก
+      </div>
+      <div class="table-wrap"><table><thead><tr><th>Liquor</th><th class="right">Par Gap</th><th class="right">Refill</th><th>ค้างจากวันที่</th><th>ฐานคำนวณ</th><th>ที่มาของตัวเลขวันนี้</th></tr></thead><tbody>
+        ${pendingRows.length ? pendingRows.map(r=>`<tr><td><strong>${esc(r.liquor.name)}</strong><div class="muted">${esc(r.liquor.outlet)}</div></td><td class="right warn-text">${fmt(r.gapMl,0)} ml</td><td class="right">${fmt(r.refillBottles,2)} ขวด</td><td><strong>${esc(r.pendingLabel)}</strong></td><td>${esc(r.baseLabel)}</td><td>${esc(r.todayReason)}<div class="muted">Used ${fmt(r.usageMl,0)} ml · Receive ${fmt(r.receive,0)} ml · Loss ${fmt(r.loss,0)} ml</div></td></tr>`).join('') : '<tr><td colspan="6" class="center muted">ไม่มีรายการ Par ค้างสำหรับวันที่นี้</td></tr>'}
+      </tbody></table></div>
+    </div>`;
+}
+
 function reportView(){
   const rep = summaryReport(state.ui.reportDate,state.ui.reportOutlet);
   return `
@@ -547,10 +636,11 @@ function reportView(){
       </div>
       <div class="inline-actions no-print" style="justify-content:flex-end;margin:12px 0"><button id="printReq" class="gold">พิมพ์ใบเบิก</button></div>
       <div class="kpis"><div class="kpi"><div class="label">ใช้เหล้ารวม</div><div class="value">${fmt(rep.totalUsage,0)} ml</div></div><div class="kpi"><div class="label">Par Gap รวม</div><div class="value">${fmt(rep.totalGap,0)} ml</div></div><div class="kpi"><div class="label">ต่ำกว่า Par</div><div class="value">${rep.lowPar}</div></div><div class="kpi"><div class="label">มี Variance</div><div class="value">${rep.varianceCount}</div></div></div>
-      <div class="table-wrap"><table><thead><tr><th>Liquor</th><th class="right">Opening</th><th class="right">Used</th><th class="right">Receive</th><th class="right">Loss</th><th class="right">Theo</th><th class="right">Actual</th><th class="right">Variance</th><th class="right">Par Gap</th><th class="right">Refill</th></tr></thead><tbody>
-      ${rep.rows.length ? rep.rows.map(r=>`<tr><td><strong>${esc(r.liquor.name)}</strong><div class="muted">${esc(r.liquor.outlet)}</div></td><td class="right">${fmt(r.openingMl,0)}</td><td class="right">${fmt(r.usageMl,0)}</td><td class="right">${fmt(r.receive,0)}</td><td class="right">${fmt(r.loss,0)}</td><td class="right">${fmt(r.theo,0)}</td><td class="right">${r.actual===null?'-':fmt(r.actual,0)}</td><td class="right ${r.variance===null?'':(r.variance<0?'danger-text':r.variance>0?'warn-text':'ok-text')}">${r.variance===null?'-':fmt(r.variance,0)}</td><td class="right ${r.gapMl>0?'warn-text':'ok-text'}">${fmt(r.gapMl,0)}</td><td class="right">${fmt(r.refillBottles,2)} ขวด</td></tr>`).join('') : '<tr><td colspan="10" class="center muted">ยังไม่มีข้อมูล</td></tr>'}
+      <div class="table-wrap"><table><thead><tr><th>Liquor</th><th class="right">Opening</th><th class="right">Used</th><th class="right">Receive</th><th class="right">Loss</th><th class="right">Theo</th><th class="right">Actual</th><th class="right">Variance</th><th class="right">Par Gap</th><th>ค้างจากวันที่</th><th>ฐานคำนวณ</th><th class="right">Refill</th></tr></thead><tbody>
+      ${rep.rows.length ? rep.rows.map(r=>`<tr><td><strong>${esc(r.liquor.name)}</strong><div class="muted">${esc(r.liquor.outlet)}</div></td><td class="right">${fmt(r.openingMl,0)}</td><td class="right">${fmt(r.usageMl,0)}</td><td class="right">${fmt(r.receive,0)}</td><td class="right">${fmt(r.loss,0)}</td><td class="right">${fmt(r.theo,0)}</td><td class="right">${r.actual===null?'-':fmt(r.actual,0)}</td><td class="right ${r.variance===null?'':(r.variance<0?'danger-text':r.variance>0?'warn-text':'ok-text')}">${r.variance===null?'-':fmt(r.variance,0)}</td><td class="right ${r.gapMl>0?'warn-text':'ok-text'}">${fmt(r.gapMl,0)}</td><td>${r.gapMl>0?esc(r.pendingLabel):'-'}</td><td>${esc(r.baseLabel)}</td><td class="right">${fmt(r.refillBottles,2)} ขวด</td></tr>`).join('') : '<tr><td colspan="12" class="center muted">ยังไม่มีข้อมูล</td></tr>'}
       </tbody></table></div>
-    </section>`;
+    </section>
+    ${pendingTraceTableHtml(rep)}`;
 }
 
 function settingsView(){
@@ -838,7 +928,7 @@ async function removeRecord(type,id){
 function printRequisition(){
   const rep = summaryReport(state.ui.reportDate,state.ui.reportOutlet); const rows = rep.rows.filter(r=>r.gapMl>0.01);
   const win = window.open('', '_blank', 'width=1100,height=800');
-  win.document.write(`<html><head><title>Par Requisition</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dfeb;padding:10px;text-align:left}th{background:#f3f7ff}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px}.box{padding-top:24px;border-top:1px solid #8ea2c0;text-align:center}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(activeAppOptions.appName)}</div><div>Par Requisition Form</div></div><div><div><strong>Date:</strong> ${state.ui.reportDate}</div><div><strong>Outlet:</strong> ${esc(state.ui.reportOutlet)}</div></div></div><table><thead><tr><th>Liquor</th><th>Closing Base (ml)</th><th>Par (ml)</th><th>Gap (ml)</th><th>Suggested Refill (Bottle)</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.liquor.name)}</td><td>${fmt(r.actual===null?r.theo:r.actual,0)}</td><td>${fmt(r.parMl,0)}</td><td>${fmt(r.gapMl,0)}</td><td>${fmt(r.refillBottles,2)}</td></tr>`).join(''):'<tr><td colspan="5">ไม่มีรายการต่ำกว่า Par</td></tr>'}</tbody></table><div class="sign"><div class="box">Prepared By</div><div class="box">Checked By</div><div class="box">Approved By</div></div></body></html>`);
+  win.document.write(`<html><head><title>Par Requisition</title><style>body{font-family:Segoe UI,Tahoma,sans-serif;padding:24px;color:#172033}.head{display:flex;justify-content:space-between;gap:16px;border-bottom:2px solid #153b70;padding-bottom:10px;margin-bottom:14px}.hotel{font-size:1.25rem;font-weight:800;color:#153b70}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d7dfeb;padding:10px;text-align:left}th{background:#f3f7ff}.sign{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:40px}.box{padding-top:24px;border-top:1px solid #8ea2c0;text-align:center}.muted{color:#61728a;font-size:.86rem}</style></head><body><div class="head"><div><div class="hotel">Laya Resort Phuket</div><div>${esc(activeAppOptions.appName)}</div><div>Par Requisition Form</div></div><div><div><strong>Date:</strong> ${state.ui.reportDate}</div><div><strong>Outlet:</strong> ${esc(state.ui.reportOutlet)}</div></div></div><table><thead><tr><th>Liquor</th><th>Closing Base (ml)</th><th>Par (ml)</th><th>Gap (ml)</th><th>Pending Since</th><th>Suggested Refill (Bottle)</th></tr></thead><tbody>${rows.length?rows.map(r=>`<tr><td>${esc(r.liquor.name)}<div class="muted">${esc(r.baseLabel)}</div></td><td>${fmt(r.actual===null?r.theo:r.actual,0)}</td><td>${fmt(r.parMl,0)}</td><td>${fmt(r.gapMl,0)}</td><td>${esc(r.pendingLabel)}</td><td>${fmt(r.refillBottles,2)}</td></tr>`).join(''):'<tr><td colspan="6">ไม่มีรายการต่ำกว่า Par</td></tr>'}</tbody></table><div class="sign"><div class="box">Prepared By</div><div class="box">Checked By</div><div class="box">Approved By</div></div></body></html>`);
   win.document.close(); win.focus(); win.print();
 }
 
